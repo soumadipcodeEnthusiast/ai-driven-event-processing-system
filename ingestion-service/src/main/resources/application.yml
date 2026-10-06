@@ -3,25 +3,32 @@ spring:
     name: ingestion-service
 
   # ── Kafka ────────────────────────────────────────────────────────────────
+  # Serialisers are fixed in KafkaConfig (String keys, raw byte[] values so the DLT
+  # receives the original bytes unchanged); the values below document them.
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: ingestion-consumer-group
       auto-offset-reset: earliest
       enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
       max-poll-records: 500
       fetch-min-size: 1
       fetch-max-wait: 500
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
       acks: all
-      retries: 3
+      compression-type: lz4
+      properties:
+        enable.idempotence: true
+        linger.ms: 5
     listener:
       ack-mode: MANUAL_IMMEDIATE
-      concurrency: 3
+      # Consumer threads per instance. Useful total (pods x concurrency) is capped
+      # by the raw-events partition count (6); k8s sets 1 so the HPA can use 6 pods.
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:3}
 
 # ── Server ───────────────────────────────────────────────────────────────────
 server:
@@ -37,13 +44,20 @@ management:
   endpoint:
     health:
       show-details: always
-  metrics:
-    export:
-      prometheus:
+      probes:
+        enabled: true   # /actuator/health/liveness and /actuator/health/readiness
+  prometheus:
+    metrics:
+      export:
         enabled: true
-  tracing:
-    sampling:
-      probability: 1.0
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        ingestion.processing: true
+      slo:
+        ingestion.processing: 500ms   # exact le="0.5" bucket for the ingestion-latency SLO alert
 
 # ── Application-specific ─────────────────────────────────────────────────────
 app:
@@ -51,6 +65,12 @@ app:
     input-topic: ${KAFKA_INPUT_TOPIC:raw-events}
     output-topic: ${KAFKA_OUTPUT_TOPIC:normalized-events}
     dead-letter-topic: ${KAFKA_DLT_TOPIC:raw-events.DLT}
+    send-timeout: 30s
+    retry:
+      max-retries: 3
+      initial-interval: 500ms
+      multiplier: 2.0
+      max-interval: 5s
   normalization:
     schema-version: "1.0"
     strict-validation: ${STRICT_VALIDATION:true}
@@ -59,7 +79,7 @@ app:
 logging:
   level:
     root: INFO
-    com.eventproc: DEBUG
+    com.eventproc: INFO
     org.apache.kafka: WARN
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} [%thread] %-5level %logger{36} - %msg%n"
