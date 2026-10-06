@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/incident-playbook.schema.json",
+  "title": "IncidentPlaybook",
+  "description": "Remediation playbook produced by diagnostic-service, served by `GET /playbook/{playbook_id}` and persisted as one JSON file per playbook under PLAYBOOK_STORE_DIR (docs/CONTRACTS.md §3). Always produced: when the LLM fails or LLM_PROVIDER=none, `generated_by` is `fallback:rule-based`.",
+  "type": "object",
+  "required": [
+    "playbook_id", "alert_id", "component_id", "summary", "root_cause_hypothesis",
+    "steps", "generated_at", "generated_by"
+  ],
+  "properties": {
+    "playbook_id": {
+      "type": "string",
+      "pattern": "^pb-[a-z0-9][a-z0-9-]*-[0-9a-f]{8}$",
+      "description": "`pb-<component_id>-<8 hex>`. Also the file name stem in the playbook store, so it must be validated against this pattern before any file-system access."
+    },
+    "alert_id": {
+      "description": "Linked PredictiveAlert (REQ-I); null for on-demand diagnoses.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^al-[0-9a-f]{12}$" }
+      ]
+    },
+    "component_id": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "summary": { "type": "string", "minLength": 1 },
+    "root_cause_hypothesis": { "type": "string", "minLength": 1 },
+    "steps": {
+      "type": "array",
+      "minItems": 3,
+      "description": "Ranked remediation steps (REQ-H). Ranks are 1..n, contiguous, unique and in ascending order (rank of item i == i+1); JSON Schema cannot fully express that, so consumers/tests must also check it.",
+      "items": { "$ref": "#/$defs/step" },
+      "prefixItems": [
+        { "properties": { "rank": { "const": 1 } } },
+        { "properties": { "rank": { "const": 2 } } },
+        { "properties": { "rank": { "const": 3 } } }
+      ]
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|\\+00:00)$"
+    },
+    "generated_by": {
+      "type": "string",
+      "description": "`<provider>:<model>` (provider in ollama|anthropic|openai) or exactly `fallback:rule-based`.",
+      "pattern": "^((ollama|anthropic|openai):.+|fallback:rule-based)$"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["rank", "title", "command", "expected_outcome"],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "description": "Suggested command or action. Advisory only: never executed by the platform." },
+        "expected_outcome": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}
