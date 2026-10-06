@@ -1,0 +1,100 @@
+# ─── forecasting-service/config/components.yaml ───────────────────────────────
+# Per-component PromQL + breach thresholds (REQ-D, REQ-F).
+#
+# * Hot-reloaded: the file is re-read whenever its mtime changes — no restart.
+# * Runtime overrides: PUT /thresholds/{component_id} {"<metric>": <float>}
+#   (overrides are kept in memory and take precedence over this file).
+# * Every query must return a single series (aggregate with max/sum); if it
+#   returns several, the engine takes the per-timestamp max (worst instance).
+# * Units: *_utilisation are ratios in [0, 1] (CPU for Python services is in
+#   cores, i.e. 1.0 = one full core); error_rate is the 5xx share of requests.
+#
+# Label conventions (infra/prometheus.yml): every application scrape job adds
+# service="<job name>"; Prometheus self-scrape is job="prometheus".
+# zookeeper, graph-db and llm expose no Prometheus metrics yet, so they are not
+# forecast (they are still part of the diagnostic dependency graph).
+
+defaults:
+  history_minutes: 180          # look-back window fed to the forecaster
+
+components:
+
+  ingestion-service:            # Spring Boot / Micrometer
+    metrics:
+      cpu_utilisation:
+        query: max(process_cpu_usage{service="ingestion-service"})
+        threshold: 0.80
+      memory_utilisation:
+        query: >-
+          max(
+            sum by (instance) (jvm_memory_used_bytes{service="ingestion-service", area="heap"})
+            /
+            sum by (instance) (jvm_memory_max_bytes{service="ingestion-service", area="heap"} > 0)
+          )
+        threshold: 0.85
+      error_rate:
+        query: >-
+          (sum(rate(http_server_requests_seconds_count{service="ingestion-service", status=~"5.."}[5m])) or vector(0))
+          /
+          (clamp_min(sum(rate(http_server_requests_seconds_count{service="ingestion-service"}[5m])), 1e-9) or vector(1))
+        threshold: 0.05
+
+  kafka:                        # no broker exporter: forecast consumer lag seen by ingestion
+    metrics:
+      consumer_lag:
+        query: max(kafka_consumer_fetch_manager_records_lag_max{service="ingestion-service"})
+        threshold: 10000
+
+  forecasting-service:          # FastAPI + prometheus_client (process collector)
+    metrics:
+      cpu_utilisation:
+        query: max(rate(process_cpu_seconds_total{service="forecasting-service"}[2m]))
+        threshold: 0.80
+      memory_utilisation:       # RSS against a 2 GiB budget (torch may be loaded)
+        query: max(process_resident_memory_bytes{service="forecasting-service"}) / 2147483648
+        threshold: 0.85
+      error_rate:
+        query: >-
+          (sum(rate(http_requests_total{service="forecasting-service", status=~"5.."}[5m])) or vector(0))
+          /
+          (clamp_min(sum(rate(http_requests_total{service="forecasting-service"}[5m])), 1e-9) or vector(1))
+        threshold: 0.05
+
+  diagnostic-service:           # FastAPI + prometheus_client (process collector)
+    metrics:
+      cpu_utilisation:
+        query: max(rate(process_cpu_seconds_total{service="diagnostic-service"}[2m]))
+        threshold: 0.80
+      memory_utilisation:       # RSS against a 1 GiB budget
+        query: max(process_resident_memory_bytes{service="diagnostic-service"}) / 1073741824
+        threshold: 0.85
+      error_rate:
+        query: >-
+          (sum(rate(http_requests_total{service="diagnostic-service", status=~"5.."}[5m])) or vector(0))
+          /
+          (clamp_min(sum(rate(http_requests_total{service="diagnostic-service"}[5m])), 1e-9) or vector(1))
+        threshold: 0.05
+
+  prometheus:                   # self-scrape
+    metrics:
+      cpu_utilisation:
+        query: max(rate(process_cpu_seconds_total{job="prometheus"}[2m]))
+        threshold: 0.80
+      memory_utilisation:       # RSS against a 2 GiB budget
+        query: max(process_resident_memory_bytes{job="prometheus"}) / 2147483648
+        threshold: 0.85
+      error_rate:
+        query: >-
+          (sum(rate(prometheus_http_requests_total{job="prometheus", code=~"5.."}[5m])) or vector(0))
+          /
+          (clamp_min(sum(rate(prometheus_http_requests_total{job="prometheus"}[5m])), 1e-9) or vector(1))
+        threshold: 0.05
+
+  # No exporters yet (ARCHITECTURE §10.8): forecast-disabled, kept so that
+  # GET /thresholds lists every monitored component id.
+  zookeeper:
+    enabled: false
+  graph-db:
+    enabled: false
+  llm:
+    enabled: false
