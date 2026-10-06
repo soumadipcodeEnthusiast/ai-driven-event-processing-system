@@ -120,13 +120,15 @@ jobs:
         run: |
           PROM=prom/prometheus:v2.52.0
           run() { docker run --rm -v "$PWD/infra:/infra" -w /infra --entrypoint promtool "$PROM" "$@"; }
+          # Generate SLO rules first so the rules directory and files exist before validation
+          python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules
           run check rules prometheus/rules/*.yml
           run test rules prometheus/rules/tests/*.yml
           # prometheus.yml references /etc/prometheus/rules; check it with rules mounted there
           docker run --rm -v "$PWD/infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
             -v "$PWD/infra/prometheus/rules:/etc/prometheus/rules:ro" \
             --entrypoint promtool "$PROM" check config /etc/prometheus/prometheus.yml
-          python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules
+          # Verify committed rules match the generated output (no stale rules)
           git diff --exit-code -- infra/prometheus/rules/ || { echo "SLO rules are stale: run python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules"; exit 1; }
 
       - name: Prometheus — every rule file is shipped to Kubernetes
