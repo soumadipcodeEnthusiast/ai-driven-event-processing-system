@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/raw-event.schema.json",
+  "title": "RawEvent",
+  "description": "Input event consumed from Kafka topic `raw-events` (docs/CONTRACTS.md §1.1). This schema expresses STRICT_VALIDATION=true (the default): unknown top-level keys are rejected. With STRICT_VALIDATION=false use `$defs/lenient` instead, which is identical except that unknown top-level keys are allowed. Non-JSON or non-object input is invalid in both modes.",
+  "type": "object",
+  "required": ["event_id", "timestamp", "source"],
+  "properties": {
+    "event_id": { "$ref": "#/$defs/nonBlankString", "description": "Producer-assigned event identifier. Becomes the Kafka key on `normalized-events`." },
+    "timestamp": { "$ref": "#/$defs/isoOffsetDateTime" },
+    "source": { "$ref": "#/$defs/nonBlankString", "description": "Logical producer of the event, e.g. `checkout-api`." },
+    "type": { "type": "string", "description": "Event type. Defaults to `generic` when normalised." },
+    "component_id": { "type": "string", "description": "Platform component the event concerns (see CONTRACTS.md §4)." },
+    "payload": { "type": "object", "description": "Arbitrary event body. Nested keys are never subject to strict validation." }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nonBlankString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "isoOffsetDateTime": {
+      "description": "ISO-8601 / RFC 3339 date-time that carries an explicit offset (`Z` or `±HH:MM`). Local date-times without an offset are invalid.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|z|[+-]\\d{2}:\\d{2})$"
+    },
+    "lenient": {
+      "description": "RawEvent under STRICT_VALIDATION=false: same required fields and types, unknown top-level keys allowed (and dropped during normalisation).",
+      "type": "object",
+      "required": ["event_id", "timestamp", "source"],
+      "properties": {
+        "event_id": { "$ref": "#/$defs/nonBlankString" },
+        "timestamp": { "$ref": "#/$defs/isoOffsetDateTime" },
+        "source": { "$ref": "#/$defs/nonBlankString" },
+        "type": { "type": "string" },
+        "component_id": { "type": "string" },
+        "payload": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
