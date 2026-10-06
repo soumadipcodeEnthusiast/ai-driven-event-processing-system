@@ -1,0 +1,137 @@
+---
+# ─── ConfigMap ────────────────────────────────────────────────────────────────
+# Env vars per docs/CONTRACTS.md §5. components.yaml is baked into the image at
+# /app/config/components.yaml; to override it without a rebuild, mount a
+# ConfigMap at /app/config (hot-reloaded on mtime change).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forecasting-config
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: forecasting-service
+    app.kubernetes.io/part-of: ai-driven-event-processor
+data:
+  # Adjust to your cluster's Prometheus service.
+  PROMETHEUS_URL: "http://prometheus:9090"
+  FORECAST_WINDOW_MINUTES: "60"
+  FORECAST_INTERVAL_SECONDS: "60"
+  ALERT_MIN_LEAD_MINUTES: "10"
+  COMPONENTS_CONFIG: "/app/config/components.yaml"
+  DIAGNOSTIC_URL: "http://diagnostic-service:8082"
+  FORECASTER: "auto"
+  TFT_MODEL_VERSION: "0.0.0-stub"
+  HOME: "/tmp"
+
+---
+# ─── Deployment ───────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forecasting-service
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: forecasting-service
+    app.kubernetes.io/component: forecasting
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  # Single replica by design (docs/adr/0007-in-memory-alert-store.md); no HPA.
+  # Recreate guarantees two pods never run concurrently during a rollout.
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: forecasting-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: forecasting-service
+        app.kubernetes.io/component: forecasting
+        app.kubernetes.io/part-of: ai-driven-event-processor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: forecasting-service
+          image: ghcr.io/your-org/forecasting-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: forecasting-config
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              # Raise to >= 2Gi for images built with INSTALL_ML=true (TFT/torch).
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# ─── Service ──────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: forecasting-service
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: forecasting-service
+    app.kubernetes.io/component: forecasting
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: forecasting-service
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      protocol: TCP
