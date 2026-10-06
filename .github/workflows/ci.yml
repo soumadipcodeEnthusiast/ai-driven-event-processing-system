@@ -119,17 +119,36 @@ jobs:
       - name: Prometheus — check config/rules, run rule unit tests, verify generated SLO rules
         run: |
           PROM=prom/prometheus:v2.52.0
+          # run() mounts $PWD/infra as /infra inside the container (working dir /infra).
+          # Paths passed to it must be relative to /infra (strip the leading "infra/").
           run() { docker run --rm -v "$PWD/infra:/infra" -w /infra --entrypoint promtool "$PROM" "$@"; }
-          # Generate SLO rules first so the rules directory and files exist before validation
+
+          # 1. Generate SLO rules so infra/prometheus/rules/*.yml exist on the host
           python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules
-          run check rules prometheus/rules/*.yml
-          run test rules prometheus/rules/tests/*.yml
-          # prometheus.yml references /etc/prometheus/rules; check it with rules mounted there
-          docker run --rm -v "$PWD/infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+
+          # 2. Build file lists with find (avoids host shell-glob expansion against the
+          #    repo root where "prometheus/rules/" does not exist), then strip "infra/"
+          #    so the paths are relative to /infra inside the container.
+          RULE_FILES=$(find infra/prometheus/rules -maxdepth 1 -name '*.yml' | sed 's|^infra/||' | tr '\n' ' ')
+          TEST_FILES=$(find infra/prometheus/rules/tests -name '*.yml' | sed 's|^infra/||' | tr '\n' ' ')
+
+          # 3. Validate rules and run unit tests
+          # shellcheck disable=SC2086
+          run check rules $RULE_FILES
+          # shellcheck disable=SC2086
+          run test rules $TEST_FILES
+
+          # 4. prometheus.yml references /etc/prometheus/rules — verify config with rules mounted
+          docker run --rm \
+            -v "$PWD/infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
             -v "$PWD/infra/prometheus/rules:/etc/prometheus/rules:ro" \
             --entrypoint promtool "$PROM" check config /etc/prometheus/prometheus.yml
-          # Verify committed rules match the generated output (no stale rules)
-          git diff --exit-code -- infra/prometheus/rules/ || { echo "SLO rules are stale: run python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules"; exit 1; }
+
+          # 5. Verify committed rules match generated output (fail if stale)
+          git diff --exit-code -- infra/prometheus/rules/ || {
+            echo "SLO rules are stale: run python3 infra/prometheus/gen_slo_rules.py infra/prometheus/rules"
+            exit 1
+          }
 
       - name: Prometheus — every rule file is shipped to Kubernetes
         run: |
