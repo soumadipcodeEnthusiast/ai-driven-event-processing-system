@@ -1,0 +1,20 @@
+# Keep the build context small and the image free of dev artefacts.
+**/__pycache__
+**/*.py[cod]
+.venv/
+venv/
+.env
+*.env.local
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.idea/
+.vscode/
+.DS_Store
+*.md
+Dockerfile
+.dockerignore
