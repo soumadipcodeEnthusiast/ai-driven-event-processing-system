@@ -1,0 +1,52 @@
+# Prometheus config for the Kubernetes deployment (infra/k8s/prometheus.yaml).
+# The compose stack uses infra/prometheus.yml instead. Both produce the same
+# `job` and `service` labels, so the rules in infra/prometheus/rules, the PromQL in
+# forecasting-service/config/components.yaml and the Grafana dashboards work
+# unchanged in either environment.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: kubernetes
+    project: ai-driven-event-processor
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+
+  # Every pod in the namespace annotated prometheus.io/scrape="true".
+  # job and service are taken from app.kubernetes.io/name (e.g. ingestion-service),
+  # and instance is the pod name, so each replica is scraped individually.
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [event-processor]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_phase]
+        action: keep
+        regex: Running
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: (.+);(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: job
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: service
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: instance
