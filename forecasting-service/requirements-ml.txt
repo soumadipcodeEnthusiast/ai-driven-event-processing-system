@@ -1,0 +1,7 @@
+# ─── forecasting-service/requirements-ml.txt — TFT forecaster + training ─────
+# Installed on top of requirements.txt when the image is built with INSTALL_ML=true.
+# CPU wheels: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ml.txt
+torch==2.3.*
+lightning==2.3.*
+pytorch-forecasting==1.1.*
+pandas==2.2.*
