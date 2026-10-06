@@ -1,0 +1,7 @@
+# ─── diagnostic-service/requirements-dev.txt — tests, lint, types ────────────
+-r requirements.txt
+pytest==8.2.*
+respx==0.21.*
+ruff==0.5.*
+mypy==1.10.*
+jsonschema==4.22.*

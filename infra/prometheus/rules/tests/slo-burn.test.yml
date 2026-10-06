@@ -1,0 +1,87 @@
+# promtool unit tests for the multi-window multi-burn-rate SLO alerts.
+rule_files:
+  - ../slo-recording.yml
+  - ../slo-burn-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 50 errors per 1000 valid events/min = 4.76% error ratio = 47.6x burn of a
+  # 99.9% objective -> both the page (fast) and ticket (slow) conditions hold.
+  - interval: 1m
+    input_series:
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="valid"}'
+        values: '0+1000x90'
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="error"}'
+        values: '0+50x90'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: IngestionErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: IngestionErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: ingestion-service
+              slo: ingestion-availability
+            exp_annotations:
+              summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (fast burn)"
+              description: "SLO ingestion-availability (objective 99.9%) error ratio is 4.762% — fast burn. See Grafana SLO dashboard."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
+              dashboard: "http://localhost:3000/d/aiops-slo"
+          - exp_labels:
+              severity: warning
+              service: ingestion-service
+              slo: ingestion-availability
+            exp_annotations:
+              summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (slow burn)"
+              description: "SLO ingestion-availability (objective 99.9%) error ratio is 4.762% — slow burn. See Grafana SLO dashboard."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
+              dashboard: "http://localhost:3000/d/aiops-slo"
+
+  # Healthy: 0.05% errors (0.5x burn) -> no alert.
+  - interval: 1m
+    input_series:
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="valid"}'
+        values: '0+2000x90'
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="error"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: IngestionErrorBudgetBurn
+        exp_alerts: []
+
+  # Forecast latency: 20% of runs slower than 2 s (Python client le="2.0").
+  - interval: 1m
+    input_series:
+      - series: 'forecast_latency_seconds_bucket{service="forecasting-service", le="1.0"}'
+        values: '0+6x90'
+      - series: 'forecast_latency_seconds_bucket{service="forecasting-service", le="2.0"}'
+        values: '0+8x90'
+      - series: 'forecast_latency_seconds_bucket{service="forecasting-service", le="+Inf"}'
+        values: '0+10x90'
+      - series: 'forecast_latency_seconds_count{service="forecasting-service"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ForecastLatencyBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: forecasting-service
+              slo: forecast-latency
+            exp_annotations:
+              summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (fast burn)"
+              description: "SLO forecast-latency (objective 99%) error ratio is 20% — fast burn. See Grafana SLO dashboard."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
+              dashboard: "http://localhost:3000/d/aiops-slo"
+          - exp_labels:
+              severity: warning
+              service: forecasting-service
+              slo: forecast-latency
+            exp_annotations:
+              summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (slow burn)"
+              description: "SLO forecast-latency (objective 99%) error ratio is 20% — slow burn. See Grafana SLO dashboard."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
+              dashboard: "http://localhost:3000/d/aiops-slo"

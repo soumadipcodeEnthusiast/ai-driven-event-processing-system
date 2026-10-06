@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: event-processor
+  labels:
+    app.kubernetes.io/part-of: ai-driven-event-processor
+    # Enforce the restricted Pod Security Standard (all pods run non-root).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

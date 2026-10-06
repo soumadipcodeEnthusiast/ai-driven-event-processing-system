@@ -1,0 +1,104 @@
+{
+  "nodes": [
+    {
+      "id": "ingestion-service",
+      "node_type": "service",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "1.0.0",
+        "owner_team": "data-platform",
+        "sla_tier": "tier-1",
+        "last_deployed_at": "2026-09-30T08:15:00Z"
+      }
+    },
+    {
+      "id": "forecasting-service",
+      "node_type": "service",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "1.0.0",
+        "owner_team": "aiops",
+        "sla_tier": "tier-2",
+        "last_deployed_at": "2026-10-01T14:40:00Z"
+      }
+    },
+    {
+      "id": "diagnostic-service",
+      "node_type": "service",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "1.0.0",
+        "owner_team": "aiops",
+        "sla_tier": "tier-2",
+        "last_deployed_at": "2026-10-01T14:45:00Z"
+      }
+    },
+    {
+      "id": "kafka",
+      "node_type": "broker",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "confluentinc/cp-kafka:7.6.1",
+        "owner_team": "platform-infra",
+        "sla_tier": "tier-1",
+        "last_deployed_at": "2026-09-15T06:00:00Z"
+      }
+    },
+    {
+      "id": "zookeeper",
+      "node_type": "datastore",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "confluentinc/cp-zookeeper:7.6.1",
+        "owner_team": "platform-infra",
+        "sla_tier": "tier-1",
+        "last_deployed_at": "2026-09-15T05:50:00Z"
+      }
+    },
+    {
+      "id": "prometheus",
+      "node_type": "service",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "prom/prometheus:v2.52.0",
+        "owner_team": "sre",
+        "sla_tier": "tier-1",
+        "last_deployed_at": "2026-09-20T10:00:00Z"
+      }
+    },
+    {
+      "id": "graph-db",
+      "node_type": "datastore",
+      "health_status": "healthy",
+      "metadata": {
+        "version": "neo4j:5.20-community",
+        "owner_team": "aiops",
+        "sla_tier": "tier-3",
+        "last_deployed_at": "2026-09-20T10:30:00Z"
+      }
+    },
+    {
+      "id": "llm",
+      "node_type": "external",
+      "health_status": "unknown",
+      "metadata": {
+        "version": "ollama/llama3.1 | anthropic/claude-sonnet-5-5",
+        "owner_team": "aiops",
+        "sla_tier": "tier-3",
+        "last_deployed_at": "2026-09-25T12:00:00Z"
+      }
+    }
+  ],
+  "edges": [
+    { "source": "ingestion-service", "target": "kafka", "edge_type": "consumes_from" },
+    { "source": "ingestion-service", "target": "kafka", "edge_type": "publishes_to" },
+    { "source": "kafka", "target": "zookeeper", "edge_type": "depends_on" },
+    { "source": "forecasting-service", "target": "prometheus", "edge_type": "calls" },
+    { "source": "forecasting-service", "target": "diagnostic-service", "edge_type": "calls" },
+    { "source": "diagnostic-service", "target": "graph-db", "edge_type": "depends_on" },
+    { "source": "diagnostic-service", "target": "llm", "edge_type": "calls" },
+    { "source": "prometheus", "target": "ingestion-service", "edge_type": "calls" },
+    { "source": "prometheus", "target": "forecasting-service", "edge_type": "calls" },
+    { "source": "prometheus", "target": "diagnostic-service", "edge_type": "calls" }
+  ]
+}

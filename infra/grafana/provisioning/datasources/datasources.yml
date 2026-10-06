@@ -1,0 +1,39 @@
+# Grafana datasource provisioning (mounted at /etc/grafana/provisioning).
+# UIDs are fixed: dashboards reference datasources by uid.
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Infinity
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+
+  # REST/JSON datasource used for the REQ-K live alert + playbook feed.
+  # Requires plugin yesoreyeram-infinity-datasource (GF_INSTALL_PLUGINS).
+  # Queries run server-side, so in-cluster DNS names are used
+  # (forecasting-service:8081, diagnostic-service:8082).
+  - name: Infinity
+    uid: infinity
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    orgId: 1
+    isDefault: false
+    editable: false
+    jsonData:
+      global_queries: []
+      allowedHosts:
+        - http://forecasting-service:8081
+        - http://diagnostic-service:8082

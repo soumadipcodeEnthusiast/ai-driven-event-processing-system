@@ -1,0 +1,177 @@
+---
+# ─── ConfigMap ────────────────────────────────────────────────────────────────
+# Env vars per docs/CONTRACTS.md §5. The dependency-graph seed is baked into the
+# image at /app/data/dependency_graph.json (GRAPH_SEED_PATH).
+# Secrets (LLM_API_KEY, GRAPH_DB_PASSWORD) come from the optional Secret
+# `diagnostic-secrets`, e.g.:
+#   kubectl -n event-processor create secret generic diagnostic-secrets \
+#     --from-literal=LLM_API_KEY=... --from-literal=GRAPH_DB_PASSWORD=...
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: diagnostic-config
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: diagnostic-service
+    app.kubernetes.io/part-of: ai-driven-event-processor
+data:
+  GRAPH_BACKEND: "networkx"
+  GRAPH_SEED_PATH: "/app/data/dependency_graph.json"
+  GRAPH_DB_URL: "bolt://neo4j:7687"
+  GRAPH_DB_USER: "neo4j"
+  # No LLM is deployed by these manifests, so default to rule-based playbooks.
+  # Set to ollama|anthropic|openai (+ LLM_API_URL / LLM_MODEL, and LLM_API_KEY
+  # in the diagnostic-secrets Secret) to enable one; failures fall back to rules.
+  LLM_PROVIDER: "none"
+  LLM_TIMEOUT_SECONDS: "60"
+  PLAYBOOK_STORE_DIR: "/data/playbooks"
+  HOME: "/tmp"
+
+---
+# ─── PersistentVolumeClaim (playbook store) ───────────────────────────────────
+# ReadWriteOnce + single writer (docs/adr/0005-file-based-json-playbook-store.md). Use a
+# ReadWriteMany class or a real store before running more than one replica.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: diagnostic-playbooks
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: diagnostic-service
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# ─── Deployment ───────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostic-service
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: diagnostic-service
+    app.kubernetes.io/component: diagnostics
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  # Single replica by design (docs/adr/0005-file-based-json-playbook-store.md); no HPA.
+  # Recreate guarantees two pods never run concurrently during a rollout.
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: diagnostic-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: diagnostic-service
+        app.kubernetes.io/component: diagnostics
+        app.kubernetes.io/part-of: ai-driven-event-processor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: diagnostic-service
+          image: ghcr.io/your-org/diagnostic-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: diagnostic-config
+          env:
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: diagnostic-secrets
+                  key: LLM_API_KEY
+                  optional: true
+            - name: GRAPH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: diagnostic-secrets
+                  key: GRAPH_DB_PASSWORD
+                  optional: true
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "768Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: playbooks
+              mountPath: /data/playbooks
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: playbooks
+          persistentVolumeClaim:
+            claimName: diagnostic-playbooks
+        - name: tmp
+          emptyDir: {}
+
+---
+# ─── Service ──────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostic-service
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: diagnostic-service
+    app.kubernetes.io/component: diagnostics
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: diagnostic-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+      protocol: TCP

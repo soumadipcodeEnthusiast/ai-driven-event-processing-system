@@ -1,0 +1,57 @@
+{#- diagnostic_prompt.j2 — GraphRAG prompt for incident playbooks (REQ-H).
+    Variables: component (dict), dependencies (list), anomalies (list),
+    unhealthy (list), now (str), max_steps (int). -#}
+An incident is predicted on the component `{{ component.node_id }}` of an event-processing platform
+(Kafka ingestion, Prometheus, ML forecasting and diagnostics services, running in Kubernetes
+namespace `event-processor` or docker compose). Diagnose the most likely root cause and write a
+remediation playbook for an on-call engineer.
+
+Current time (UTC): {{ now }}
+
+## Component under investigation
+- id: {{ component.node_id }}
+- type: {{ component.node_type }}
+- health: {{ component.health_status }}
+- version: {{ component.metadata.version }}
+- owner team: {{ component.metadata.owner_team }}
+- SLA tier: {{ component.metadata.sla_tier }}
+- last deployed at: {{ component.metadata.last_deployed_at }}
+
+## Predicted anomalies (from the forecasting service, p90 forecast)
+{% if anomalies -%}
+{% for a in anomalies -%}
+- {{ a | tojson }}
+{% endfor -%}
+{% else -%}
+- none supplied (on-demand diagnosis)
+{% endif %}
+## Dependency subgraph (2 hops; downstream = this component depends on it, upstream = depends on this component)
+{% if dependencies -%}
+| node | type | health | edge | direction | depth | via | owner | last deployed |
+|---|---|---|---|---|---|---|---|---|
+{% for d in dependencies -%}
+| {{ d.node_id }} | {{ d.node_type }} | {{ d.health_status }} | {{ d.edge_type }} | {{ d.direction }} | {{ d.depth }} | {{ d.via }} | {{ d.metadata.owner_team }} | {{ d.metadata.last_deployed_at }} |
+{% endfor -%}
+{% else -%}
+(no dependencies recorded)
+{% endif %}
+{% if unhealthy -%}
+Unhealthy dependencies: {{ unhealthy | join(", ") }}
+{% endif %}
+## Instructions
+1. Use only the facts above; if evidence is weak, say so in the hypothesis.
+2. Prefer causes in downstream dependencies that are degraded/down, then resource pressure on the
+   component itself, then recent deployments.
+3. Produce between 3 and {{ max_steps }} steps ranked by priority (rank 1 = do first): diagnostic
+   checks first, then mitigations, then follow-ups. Commands must be safe, read-only where possible,
+   and concrete (kubectl / curl / kafka CLI). Destructive actions must say so in the title.
+
+## Output format
+Respond with a single JSON object and nothing else (no prose, no Markdown fences), exactly:
+{
+  "summary": "<one sentence describing the incident>",
+  "root_cause_hypothesis": "<most likely root cause and the evidence for it>",
+  "steps": [
+    {"rank": 1, "title": "<short imperative action>", "command": "<shell command or empty string>", "expected_outcome": "<what success looks like>"}
+  ]
+}

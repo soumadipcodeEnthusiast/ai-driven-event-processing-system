@@ -1,0 +1,23 @@
+# Entry point for Kubernetes: kubectl apply -k infra
+#
+# Wraps infra/k8s and generates the Prometheus ConfigMaps from the same rule
+# files the compose stack mounts. Kustomize can only load files at or below its
+# root, which is why this lives in infra/ rather than infra/k8s/.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - k8s
+
+configMapGenerator:
+  - name: prometheus-config
+    namespace: event-processor
+    files:
+      - prometheus.yml=prometheus/prometheus-k8s.yml
+  - name: prometheus-rules
+    namespace: event-processor
+    files:
+      - prometheus/rules/aiops-alerts.yml
+      - prometheus/rules/aiops-recording.yml
+      - prometheus/rules/slo-burn-alerts.yml
+      - prometheus/rules/slo-recording.yml

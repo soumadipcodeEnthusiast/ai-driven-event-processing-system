@@ -53,12 +53,17 @@ Thumbs.db
 *.swo
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
-.dockerignore
+# (.dockerignore files are committed — they keep build contexts small.)
+.docker-cache/
 
 # ─── Logs ────────────────────────────────────────────────────────────────────
 logs/
 *.log
 *.log.*
+
+# ─── Local stack ─────────────────────────────────────────────────────────────
+# Playbooks written when running diagnostic-service outside Docker.
+diagnostic-service/playbooks/
 
 # ─── Kubernetes secrets / generated ──────────────────────────────────────────
 infra/k8s/secrets/
@@ -66,6 +71,8 @@ kubeconfig
 
 # ─── Test output ─────────────────────────────────────────────────────────────
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 htmlcov/
 .coverage
 coverage.xml

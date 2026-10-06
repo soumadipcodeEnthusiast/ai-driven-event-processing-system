@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/normalized-event.schema.json",
+  "title": "NormalizedEvent",
+  "description": "Canonical event published to Kafka topic `normalized-events`, keyed by `event_id` (docs/CONTRACTS.md §1.2). All eight keys are always present; `component_id` is serialised as an explicit JSON null when absent on the raw event.",
+  "type": "object",
+  "required": ["event_id", "timestamp", "source", "type", "component_id", "payload", "schema_version", "ingested_at"],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "timestamp": { "$ref": "#/$defs/utcInstant", "description": "Raw `timestamp` converted to a UTC instant." },
+    "source": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "type": { "type": "string", "description": "Raw `type`, or `generic` when absent." },
+    "component_id": { "type": ["string", "null"], "description": "Raw `component_id`, or null when absent." },
+    "payload": { "type": "object", "description": "Raw `payload`, or `{}` when absent." },
+    "schema_version": { "type": "string", "const": "1.0" },
+    "ingested_at": { "$ref": "#/$defs/utcInstant", "description": "UTC instant at which ingestion-service normalised the event." }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "utcInstant": {
+      "description": "UTC instant in ISO-8601 form with a `Z` suffix (java.time.Instant#toString); fractional seconds optional, up to nanoseconds.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    }
+  }
+}

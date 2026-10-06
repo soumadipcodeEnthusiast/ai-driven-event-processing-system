@@ -1,0 +1,230 @@
+# Symptom / cause alerts for the AI-driven event processor.
+# SLO burn-rate alerts live in slo-burn-alerts.yml (generated).
+# Every alert carries `severity` (critical = page, warning = ticket/next business
+# hour, info = dashboard only) and a `runbook_url` (docs/runbooks/<name>.md).
+groups:
+  # ── Availability ────────────────────────────────────────────────────────────
+  - name: aiops-availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"ingestion-service|forecasting-service|diagnostic-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} is down (Prometheus scrape failing)"
+          description: "Prometheus has failed to scrape {{ $labels.service }} ({{ $labels.instance }}) for more than 1 minute."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/service-down.md"
+
+      - alert: GrafanaDown
+        expr: up{job="grafana"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: grafana
+        annotations:
+          summary: "Grafana (REQ-K dashboard) is unreachable"
+          description: "Prometheus has failed to scrape Grafana ({{ $labels.instance }}) for 5 minutes; the AIOps Overview dashboard is unavailable."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/grafana-down.md"
+
+  # ── Ingestion (REQ-A / REQ-B / REQ-C) ───────────────────────────────────────
+  - name: aiops-ingestion
+    rules:
+      - alert: IngestionInvalidRatioHigh
+        expr: |
+          service:ingestion_events_invalid:ratio_rate10m > 0.05
+          and on ()
+          sum(rate(ingestion_events_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: ingestion-service
+        annotations:
+          summary: "More than 5% of raw events are invalid and routed to raw-events.DLT"
+          description: "{{ $value | humanizePercentage }} of consumed events failed validation over the last 10m. A producer is likely sending malformed events (REQ-B)."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-invalid-ratio-high.md"
+
+      - alert: IngestionConsumerLagHigh
+        # REQ-A: lag < 500 ms at 10 000 ev/s  ==>  < 5 000 records behind.
+        expr: service:kafka_consumer_records_lag:max > 5000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ingestion consumer lag > 5000 records (> 500 ms at 10k ev/s, REQ-A)"
+          description: "Max records lag is {{ $value }} records for 5 minutes."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-consumer-lag-high.md"
+      - alert: IngestionConsumerLagHigh
+        expr: service:kafka_consumer_records_lag:max > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ingestion consumer lag > 1000 records for 15 minutes"
+          description: "Max records lag is {{ $value }} records; headroom against the REQ-A target (5000) is shrinking."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-consumer-lag-high.md"
+
+      - alert: IngestionConsumerStalled
+        # Lag exists but nothing is being processed: consumer stuck / rebalancing loop.
+        expr: |
+          (sum(rate(ingestion_events_total[5m])) or vector(0)) == 0
+          and on ()
+          service:kafka_consumer_records_lag:max > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: ingestion-service
+        annotations:
+          summary: "Ingestion consumer is stalled: lag present but zero events processed"
+          description: "No events processed in 5m while the consumer is behind. Events are not flowing to normalized-events."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-consumer-stalled.md"
+
+      - alert: IngestionJvmHeapHigh
+        expr: |
+          sum by (service, instance) (jvm_memory_used_bytes{service="ingestion-service", area="heap"})
+          /
+          sum by (service, instance) (jvm_memory_max_bytes{service="ingestion-service", area="heap"} > 0)
+          > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ingestion JVM heap usage > 90% on {{ $labels.instance }}"
+          description: "Heap usage is {{ $value | humanizePercentage }}. Risk of GC thrash / OOMKill and consumer lag."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-jvm-heap-high.md"
+
+  # ── Forecasting (REQ-D / REQ-E / REQ-F) ─────────────────────────────────────
+  - name: aiops-forecasting
+    rules:
+      - alert: ForecastComponentFailing
+        expr: |
+          sum by (component) (rate(forecast_runs_total{outcome="error"}[15m]))
+          /
+          sum by (component) (rate(forecast_runs_total[15m]))
+          > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: forecasting-service
+        annotations:
+          summary: "Forecasts for {{ $labels.component }} are failing"
+          description: "{{ $value | humanizePercentage }} of forecast runs for {{ $labels.component }} errored over 15m — this component has no predictive coverage."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-component-failing.md"
+
+      - alert: ForecastLoopStalled
+        # The background loop runs every FORECAST_INTERVAL_SECONDS (60 s). No runs
+        # at all = silent loss of predictive alerting.
+        expr: |
+          (sum(increase(forecast_runs_total[10m])) or vector(0)) == 0
+          and on ()
+          (sum(up{job="forecasting-service"}) == 1)
+        for: 5m
+        labels:
+          severity: critical
+          service: forecasting-service
+        annotations:
+          summary: "Forecasting background loop has not run in 10+ minutes"
+          description: "forecasting-service is up but recorded no forecast runs in 10m; no PredictiveAlerts can be emitted."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-loop-stalled.md"
+
+  # ── Diagnostics (REQ-G / REQ-H / REQ-I) ─────────────────────────────────────
+  - name: aiops-diagnostic
+    rules:
+      - alert: DiagnosticFallbackRatioHigh
+        # LLM degraded: playbooks are still produced (rule-based) but lower quality.
+        # Suppressed when no LLM is configured (LLM_PROVIDER=none → no LLM series).
+        expr: |
+          service:diagnoses_fallback:ratio_rate30m > 0.5
+          and on (service)
+          service:llm_calls:increase30m > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 50% of diagnoses fell back to rule-based playbooks (LLM degraded)"
+          description: "Fallback ratio is {{ $value | humanizePercentage }} over 30m while an LLM provider is configured."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/diagnostic-fallback-ratio-high.md"
+
+      - alert: LLMRequestFailures
+        expr: sum by (provider) (increase(llm_failures_total[15m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: diagnostic-service
+        annotations:
+          summary: "LLM provider {{ $labels.provider }} is failing"
+          description: "{{ $value | humanize }} LLM request failures in the last 15m (timeouts, HTTP errors or unparseable output)."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/llm-request-failures.md"
+
+      - alert: DiagnosisErrorRateHigh
+        # outcome=error means NO playbook was produced (not even the fallback).
+        expr: |
+          sum(increase(diagnoses_total{outcome="error"}[30m]))
+          /
+          sum(increase(diagnoses_total[30m]))
+          > 0.05
+          and on ()
+          sum(increase(diagnoses_total[30m])) >= 3
+        for: 5m
+        labels:
+          severity: critical
+          service: diagnostic-service
+        annotations:
+          summary: "Diagnoses are failing — alerts are not getting playbooks"
+          description: "{{ $value | humanizePercentage }} of diagnoses errored over 30m (REQ-H/REQ-I at risk)."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/diagnosis-error-rate-high.md"
+
+      - alert: DiagnosisLatencyHigh
+        expr: service:diagnosis_latency_seconds:p95_5m > 30
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Diagnosis p95 latency > 30 s"
+          description: "p95 end-to-end diagnosis latency is {{ $value | humanizeDuration }}. Playbooks reach on-call late; check LLM latency."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/diagnosis-latency-high.md"
+
+      - alert: GraphContextLatencyHigh
+        # REQ-G: 2-hop context < 1 s for graphs <= 500 nodes.
+        expr: service:graph_context_seconds:p95_5m > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Graph context retrieval p95 > 1 s (REQ-G)"
+          description: "p95 2-hop dependency context latency is {{ $value | humanizeDuration }}."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/graph-context-latency-high.md"
+
+  # ── Predictive alerts produced by the system itself ─────────────────────────
+  - name: aiops-predictive
+    rules:
+      - alert: PredictiveAlertCritical
+        # increase() misses the first increment of a brand-new labelled series,
+        # so also catch series that did not exist 10 minutes ago.
+        expr: |
+          sum by (component) (increase(predictive_alerts_total{severity="critical"}[10m])) > 0
+          or
+          sum by (component) (
+            predictive_alerts_total{severity="critical"}
+            unless predictive_alerts_total{severity="critical"} offset 10m
+          ) > 0
+        labels:
+          severity: critical
+          service: forecasting-service
+        annotations:
+          summary: "Critical predicted breach for {{ $labels.component }}"
+          description: "The forecasting service predicts a >= 50% threshold overshoot for {{ $labels.component }}. Open the AIOps Overview dashboard for the alert and its playbook."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/predictive-alert-critical.md"
+          dashboard: "http://localhost:3000/d/aiops-overview"
+
+      - alert: PredictiveAlertsUnacknowledged
+        expr: sum(predictive_alerts_open) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: forecasting-service
+        annotations:
+          summary: "{{ $value }} predictive alert(s) open and unacknowledged for 30+ minutes"
+          description: "Predicted breaches are approaching without anyone acknowledging them. Lead time is being consumed."
+          runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/predictive-alerts-unacknowledged.md"
+          dashboard: "http://localhost:3000/d/aiops-overview"

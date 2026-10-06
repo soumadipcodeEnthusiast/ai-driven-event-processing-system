@@ -1,0 +1,56 @@
+# Golden-signal recording rules used by the Grafana dashboards and alert rules.
+# Metric names are fixed by docs/CONTRACTS.md §7 — do not rename.
+groups:
+  - name: aiops-ingestion-recording
+    rules:
+      - record: outcome:ingestion_events:rate1m
+        expr: sum by (outcome) (rate(ingestion_events_total[1m]))
+      - record: service:ingestion_events_invalid:ratio_rate10m
+        expr: |
+          sum(rate(ingestion_events_total{outcome="invalid"}[10m]))
+          /
+          sum(rate(ingestion_events_total[10m]))
+        labels: {service: ingestion-service}
+      - record: service:ingestion_processing_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(ingestion_processing_seconds_bucket[5m])))
+        labels: {service: ingestion-service}
+      - record: service:ingestion_processing_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(ingestion_processing_seconds_bucket[5m])))
+        labels: {service: ingestion-service}
+      - record: service:kafka_consumer_records_lag:max
+        expr: max(kafka_consumer_fetch_manager_records_lag_max{service="ingestion-service"} >= 0)
+        labels: {service: ingestion-service}
+
+  - name: aiops-forecasting-recording
+    rules:
+      - record: service:forecast_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(forecast_latency_seconds_bucket[5m])))
+        labels: {service: forecasting-service}
+      - record: component_outcome:forecast_runs:rate5m
+        expr: sum by (component, outcome) (rate(forecast_runs_total[5m]))
+
+  - name: aiops-diagnostic-recording
+    rules:
+      - record: service:diagnosis_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(diagnosis_latency_seconds_bucket[5m])))
+        labels: {service: diagnostic-service}
+      - record: service:graph_context_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(graph_context_seconds_bucket[5m])))
+        labels: {service: diagnostic-service}
+      - record: provider:llm_request_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (provider, le) (rate(llm_request_seconds_bucket[5m])))
+      # Share of diagnoses that fell back to the rule-based playbook (LLM degraded/unset).
+      - record: service:diagnoses_fallback:ratio_rate30m
+        expr: |
+          sum(increase(diagnoses_total{outcome="fallback"}[30m]))
+          /
+          sum(increase(diagnoses_total[30m]))
+        labels: {service: diagnostic-service}
+      # Non-zero only when an LLM is actually configured and being called
+      # (LLM_PROVIDER=none produces neither series).
+      - record: service:llm_calls:increase30m
+        expr: |
+          (sum(increase(llm_request_seconds_count[30m])) or vector(0))
+          +
+          (sum(increase(llm_failures_total[30m])) or vector(0))
+        labels: {service: diagnostic-service}

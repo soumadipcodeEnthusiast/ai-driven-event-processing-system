@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/dependency-graph-seed.schema.json",
+  "title": "DependencyGraphSeed",
+  "description": "Seed file for the dependency graph (`diagnostic-service/data/dependency_graph.json`, overridable via GRAPH_SEED_PATH). Loaded into networkx by default (GRAPH_BACKEND=networkx) and usable to seed Neo4j. Edges are directed: `source` calls / depends_on / publishes_to / consumes_from `target`. The graph client returns nodes with `node_id` = seed `id` (docs/CONTRACTS.md §3-4).",
+  "type": "object",
+  "required": ["nodes", "edges"],
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nodeId": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "node": {
+      "type": "object",
+      "required": ["id", "node_type", "metadata", "health_status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "node_type": { "enum": ["service", "datastore", "broker", "external"] },
+        "metadata": {
+          "type": "object",
+          "required": ["version", "owner_team", "sla_tier", "last_deployed_at"],
+          "properties": {
+            "version": { "type": "string" },
+            "owner_team": { "type": "string" },
+            "sla_tier": { "type": "string", "description": "e.g. `tier-1`, `tier-2`, `tier-3`." },
+            "last_deployed_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "health_status": { "enum": ["healthy", "degraded", "down", "unknown"] }
+      },
+      "additionalProperties": false
+    },
+    "edge": {
+      "type": "object",
+      "required": ["source", "target", "edge_type"],
+      "properties": {
+        "source": { "$ref": "#/$defs/nodeId" },
+        "target": { "$ref": "#/$defs/nodeId" },
+        "edge_type": { "enum": ["calls", "depends_on", "publishes_to", "consumes_from"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

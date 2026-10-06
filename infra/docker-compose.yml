@@ -1,17 +1,29 @@
-version: "3.9"
+# Local stack for the AI-Driven Event Processing Architecture.
+# Spec: docs/CONTRACTS.md (ports §8, env vars §5).
+#
+#   docker compose -f infra/docker-compose.yml up --build -d
+#   docker compose -f infra/docker-compose.yml --profile llm up -d      # + Ollama (LLM playbooks)
+#   docker compose -f infra/docker-compose.yml --profile neo4j up -d    # + Neo4j (set GRAPH_BACKEND=neo4j)
+#
+# By default (LLM_PROVIDER=none) diagnostic-service builds rule-based playbooks.
+# With the `llm` profile and LLM_PROVIDER=ollama it asks the local model and
+# still falls back to rules if the call fails or the answer is malformed.
 
-# ─── Networks ─────────────────────────────────────────────────────────────────
+name: ai-event-processor
+
 networks:
   event-net:
     driver: bridge
 
-# ─── Volumes ──────────────────────────────────────────────────────────────────
 volumes:
   zookeeper-data:
   kafka-data:
   prometheus-data:
+  grafana-data:
+  playbooks-data:
+  neo4j-data:
+  ollama-data:
 
-# ─── Services ─────────────────────────────────────────────────────────────────
 services:
 
   # ── Zookeeper ──────────────────────────────────────────────────────────────
@@ -26,10 +38,11 @@ services:
     networks:
       - event-net
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      # The cp-* images don't reliably ship `nc`; use bash's /dev/tcp instead.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/2181"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   # ── Kafka broker ───────────────────────────────────────────────────────────
   kafka:
@@ -46,6 +59,7 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -55,28 +69,39 @@ services:
     networks:
       - event-net
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:29092"]
       interval: 15s
       timeout: 10s
       retries: 10
+      start_period: 20s
 
-  # ── Topic initialiser (runs once, then exits) ──────────────────────────────
+  # ── Topic initialiser (one-shot; ingestion waits for it to succeed) ────────
   kafka-init:
     image: confluentinc/cp-kafka:7.6.1
     container_name: kafka-init
     depends_on:
       kafka:
         condition: service_healthy
-    entrypoint: >
-      bash -c "
-        kafka-topics --create --if-not-exists --topic raw-events
-          --bootstrap-server kafka:29092 --partitions 3 --replication-factor 1 &&
-        kafka-topics --create --if-not-exists --topic normalized-events
-          --bootstrap-server kafka:29092 --partitions 3 --replication-factor 1 &&
-        kafka-topics --create --if-not-exists --topic raw-events.DLT
-          --bootstrap-server kafka:29092 --partitions 1 --replication-factor 1 &&
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        BS=kafka:29092
+        # 6 partitions on the main topics = max useful ingestion consumers
+        # (2 pods x concurrency 3 today; HPA max 6). Can't scale past this.
+        ensure_topic() {
+          kafka-topics --bootstrap-server "$$BS" --create --if-not-exists --topic "$$1" --partitions "$$2" --replication-factor 1
+          # Grow topics created by older stacks (kafka-data volume); never shrinks.
+          current=$$(kafka-topics --bootstrap-server "$$BS" --describe --topic "$$1" | grep -c 'Partition: ')
+          if [ "$$current" -lt "$$2" ]; then
+            kafka-topics --bootstrap-server "$$BS" --alter --topic "$$1" --partitions "$$2"
+          fi
+        }
+        ensure_topic raw-events 6
+        ensure_topic normalized-events 6
+        ensure_topic raw-events.DLT 1
+        kafka-topics --bootstrap-server "$$BS" --list
         echo 'Topics created successfully.'
-      "
     networks:
       - event-net
     restart: "no"
@@ -89,6 +114,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -99,16 +125,50 @@ services:
     networks:
       - event-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      # prom/prometheus is busybox-based and ships wget.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  # ── Grafana (REQ-K dashboard) ──────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.6.1
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Local convenience only: read-only anonymous access.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/aiops-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - event-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ── Ingestion Service (Java Spring Boot) ───────────────────────────────────
   ingestion-service:
     build:
       context: ../ingestion-service
       dockerfile: Dockerfile
+    image: ai-event-processor/ingestion-service:local
     container_name: ingestion-service
     ports:
       - "8080:8080"
@@ -117,42 +177,22 @@ services:
       KAFKA_INPUT_TOPIC: raw-events
       KAFKA_OUTPUT_TOPIC: normalized-events
       KAFKA_DLT_TOPIC: raw-events.DLT
-      STRICT_VALIDATION: "true"
-      JAVA_OPTS: "-Xms256m -Xmx512m"
+      STRICT_VALIDATION: ${STRICT_VALIDATION:-true}
+      JAVA_OPTS: "-XX:+UseContainerSupport -Xms256m -Xmx512m"
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - event-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      # JRE image has no curl/wget; talk HTTP over bash's /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"UP\"' <&3"]
       interval: 20s
       timeout: 10s
       retries: 10
-    restart: on-failure
-
-  # ── Forecasting Service (Python FastAPI) ───────────────────────────────────
-  forecasting-service:
-    build:
-      context: ../forecasting-service
-      dockerfile: Dockerfile
-    container_name: forecasting-service
-    ports:
-      - "8081:8081"
-    environment:
-      PROMETHEUS_URL: http://prometheus:9090
-      FORECAST_WINDOW_MINUTES: "60"
-      TFT_MODEL_VERSION: "0.0.0-stub"
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    networks:
-      - event-net
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
+      start_period: 60s
     restart: on-failure
 
   # ── Diagnostic Service (Python FastAPI) ────────────────────────────────────
@@ -160,22 +200,132 @@ services:
     build:
       context: ../diagnostic-service
       dockerfile: Dockerfile
+    image: ai-event-processor/diagnostic-service:local
     container_name: diagnostic-service
     ports:
       - "8082:8082"
     environment:
+      GRAPH_BACKEND: ${GRAPH_BACKEND:-networkx}
+      GRAPH_SEED_PATH: /app/data/dependency_graph.json
       GRAPH_DB_URL: bolt://neo4j:7687
       GRAPH_DB_USER: neo4j
-      GRAPH_DB_PASSWORD: changeme
-      LLM_API_URL: http://ollama:11434
-      LLM_MODEL: llama3
+      GRAPH_DB_PASSWORD: ${GRAPH_DB_PASSWORD:-localdevpassword}
+      # Default `none` = rule-based playbooks. For a local LLM run with
+      # `--profile llm` and LLM_PROVIDER=ollama; any LLM failure falls back to rules.
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}   # set to ollama (with --profile llm), anthropic or openai
+      LLM_API_URL: ${LLM_API_URL:-}         # empty = provider default
+      LLM_MODEL: ${LLM_MODEL:-}             # empty = provider default (ollama: llama3.1)
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      PLAYBOOK_STORE_DIR: /data/playbooks
     depends_on:
-      - ingestion-service
+      # Only enforced when the `neo4j` profile is active; the graph client
+      # checks connectivity once at startup, so it must not race Neo4j.
+      neo4j:
+        condition: service_healthy
+        required: false
+    volumes:
+      - playbooks-data:/data/playbooks
     networks:
       - event-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=3)"]
       interval: 20s
       timeout: 10s
       retries: 5
+      start_period: 20s
     restart: on-failure
+
+  # ── Forecasting Service (Python FastAPI) ───────────────────────────────────
+  forecasting-service:
+    build:
+      context: ../forecasting-service
+      dockerfile: Dockerfile
+      args:
+        INSTALL_ML: ${INSTALL_ML:-false}
+    image: ai-event-processor/forecasting-service:local
+    container_name: forecasting-service
+    ports:
+      - "8081:8081"
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      FORECAST_WINDOW_MINUTES: "60"
+      FORECAST_INTERVAL_SECONDS: ${FORECAST_INTERVAL_SECONDS:-60}
+      ALERT_MIN_LEAD_MINUTES: ${ALERT_MIN_LEAD_MINUTES:-10}
+      COMPONENTS_CONFIG: /app/config/components.yaml
+      DIAGNOSTIC_URL: http://diagnostic-service:8082
+      FORECASTER: ${FORECASTER:-auto}
+      TFT_MODEL_VERSION: ${TFT_MODEL_VERSION:-0.0.0-stub}
+    volumes:
+      # Bind-mounted so threshold/component edits hot-reload (mtime) without a rebuild.
+      - ../forecasting-service/config:/app/config:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      diagnostic-service:
+        condition: service_healthy
+    networks:
+      - event-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: on-failure
+
+  # ── Optional: Neo4j graph backend (profile `neo4j`) ────────────────────────
+  # Use with GRAPH_BACKEND=neo4j. Bolt 7687, browser 7474.
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: neo4j
+    profiles: ["neo4j"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${GRAPH_DB_PASSWORD:-localdevpassword}
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - neo4j-data:/data
+    networks:
+      - event-net
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Optional: Ollama local LLM (profile `llm`) ─────────────────────────────
+  ollama:
+    image: ollama/ollama:0.35.1
+    container_name: ollama
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - event-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: pull the model into the ollama volume, then exit.
+  ollama-pull:
+    image: ollama/ollama:0.35.1
+    container_name: ollama-pull
+    profiles: ["llm"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${LLM_MODEL:-llama3.1}"]
+    networks:
+      - event-net
+    restart: "no"

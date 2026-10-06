@@ -1,129 +1,437 @@
 """
-playbook_generator.py — Incident playbook generation and rendering stub.
-
-Houses IncidentPlaybook (data model) and PlaybookGenerator (service class).
+playbook_generator.py — IncidentPlaybook model, LLM-output parsing and the
+JSON-file playbook store.
 
 Requirements:
-    REQ-H — The system shall parse the LLM response into a structured playbook.
-    REQ-I — The system shall persist and expose playbooks by ID.
+    REQ-H — Parse the LLM response into >= 3 ranked remediation steps.
+    REQ-I — Persist playbooks (one JSON file each under PLAYBOOK_STORE_DIR),
+            link them to the alert, expose them by ID.
+
+The JSON field set is exhaustive (contracts/incident-playbook.schema.json,
+additionalProperties: false). ``command`` text is advisory only and is never
+executed by the platform; ``render()`` escapes all model-provided text.
 """
 
 from __future__ import annotations
 
+import html
+import json
 import logging
+import os
+import re
+import secrets
+import tempfile
+import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+
+from app.metrics import PLAYBOOKS_PRUNED, PLAYBOOKS_STORED
 
 logger = logging.getLogger(__name__)
 
+PLAYBOOK_ID_RE = re.compile(r"^pb-[a-z0-9][a-z0-9-]*-[0-9a-f]{8}$")
+ALERT_ID_RE = re.compile(r"^al-[0-9a-f]{12}$")
+COMPONENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MIN_STEPS = 3
+MAX_STEPS = 10
+MAX_TEXT = 2000
 
-# ─── IncidentPlaybook ─────────────────────────────────────────────────────────
+
+class PlaybookParseError(ValueError):
+    """LLM output could not be turned into a valid playbook."""
+
+
+def utc_iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def new_playbook_id(component_id: str) -> str:
+    return f"pb-{component_id}-{secrets.token_hex(4)}"
+
+
+def is_valid_playbook_id(playbook_id: str) -> bool:
+    return bool(PLAYBOOK_ID_RE.fullmatch(playbook_id))
+
+
+# ─── Markdown escaping ───────────────────────────────────────────────────────
+
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]#|>~])")
+
+
+def md_escape(text: str) -> str:
+    """Escape untrusted text for inline Markdown (no HTML, no formatting injection)."""
+    one_line = " ".join(str(text).split())
+    return _MD_SPECIAL.sub(r"\\\1", html.escape(one_line, quote=False))
+
+
+def md_code_block(text: str) -> str:
+    """Fenced code block whose fence is longer than any backtick run in *text*."""
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}text\n{text}\n{fence}"
+
+
+# ─── IncidentPlaybook ────────────────────────────────────────────────────────
+
 
 @dataclass
 class IncidentPlaybook:
     """
-    Represents a generated incident remediation playbook.
+    Generated incident remediation playbook (CONTRACTS §3).
 
-    Class-diagram attributes:
-        playbook_id  — globally unique playbook identifier
-        steps        — ordered list of remediation step dicts
-        generated_at — UTC timestamp of generation
+    Class-diagram attributes: playbook_id, steps, generated_at.
     """
 
     playbook_id: str
+    component_id: str
+    summary: str
+    root_cause_hypothesis: str
     steps: list[dict[str, Any]] = field(default_factory=list)
+    alert_id: str | None = None
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_by: str = "fallback:rule-based"
 
     def render(self) -> str:
         """
-        Render the playbook as a human-readable Markdown string.
+        Render the playbook as Markdown.
 
-        REQ-I: The rendered output shall include the playbook ID, generation
-        timestamp, and each step formatted with its rank, title, command,
-        and expected outcome.
-
-        Returns:
-            Markdown-formatted playbook string.
-
-        Raises:
-            NotImplementedError: until implemented.
+        REQ-I: includes playbook ID, generation timestamp and each step with
+        rank, title, command and expected outcome. All model text is escaped;
+        commands are shown in fenced blocks and are advisory only.
         """
-        # TODO: implement — REQ-I
-        #   1. Use Jinja2 or f-strings to format header with playbook_id and generated_at
-        #   2. Iterate self.steps, format each as numbered Markdown section
-        #   3. Return assembled string
-        raise NotImplementedError("TODO: implement render — REQ-I")
+        lines = [
+            f"# Incident playbook `{self.playbook_id}`",
+            "",
+            f"- **Component:** {md_escape(self.component_id)}",
+            f"- **Alert:** {md_escape(self.alert_id) if self.alert_id else 'n/a (on-demand)'}",
+            f"- **Generated at:** {utc_iso(self.generated_at)}",
+            f"- **Generated by:** {md_escape(self.generated_by)}",
+            "",
+            "## Summary",
+            "",
+            md_escape(self.summary),
+            "",
+            "## Root-cause hypothesis",
+            "",
+            md_escape(self.root_cause_hypothesis),
+            "",
+            "## Remediation steps",
+            "",
+            "> Commands are suggestions for a human operator; they are never executed "
+            "automatically. Review before running.",
+        ]
+        for step in self.steps:
+            lines += ["", f"### {step['rank']}. {md_escape(step['title'])}", ""]
+            if step.get("command"):
+                lines += [md_code_block(str(step["command"])), ""]
+            lines.append(f"**Expected outcome:** {md_escape(step['expected_outcome'])}")
+        return "\n".join(lines) + "\n"
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serialisable representation of the playbook."""
         return {
             "playbook_id": self.playbook_id,
-            "steps": self.steps,
-            "generated_at": self.generated_at.isoformat(),
+            "alert_id": self.alert_id,
+            "component_id": self.component_id,
+            "summary": self.summary,
+            "root_cause_hypothesis": self.root_cause_hypothesis,
+            "steps": [
+                {
+                    "rank": int(s["rank"]),
+                    "title": s["title"],
+                    "command": s["command"],
+                    "expected_outcome": s["expected_outcome"],
+                }
+                for s in self.steps
+            ],
+            "generated_at": utc_iso(self.generated_at),
+            "generated_by": self.generated_by,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> IncidentPlaybook:
+        return cls(
+            playbook_id=d["playbook_id"],
+            component_id=d["component_id"],
+            summary=d["summary"],
+            root_cause_hypothesis=d["root_cause_hypothesis"],
+            steps=list(d["steps"]),
+            alert_id=d.get("alert_id"),
+            generated_at=datetime.fromisoformat(d["generated_at"].replace("Z", "+00:00")),
+            generated_by=d["generated_by"],
+        )
 
-# ─── PlaybookGenerator ────────────────────────────────────────────────────────
+
+# ─── LLM output parsing (REQ-H) ──────────────────────────────────────────────
+
+_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
+_STEP_KEYS = {
+    "title": ("title", "action", "step", "name", "description"),
+    "command": ("command", "cmd", "commands", "shell"),
+    "expected_outcome": ("expected_outcome", "expected", "outcome", "expected_result", "result"),
+}
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        value = "\n".join(str(v) for v in value)
+    return str(value).strip()[:MAX_TEXT]
+
+
+def extract_json(text: str) -> Any:
+    """Extract the first JSON object/array from *text* (tolerates code fences and prose)."""
+    candidates = [m.group(1) for m in _FENCE_RE.finditer(text)] + [text]
+    decoder = json.JSONDecoder()
+    for cand in candidates:
+        cand = cand.strip()
+        try:
+            return json.loads(cand)
+        except ValueError:
+            pass
+        for i, ch in enumerate(cand):
+            if ch in "{[":
+                try:
+                    obj, _ = decoder.raw_decode(cand, i)
+                except ValueError:
+                    continue
+                if isinstance(obj, (dict, list)) and obj:
+                    return obj
+    raise PlaybookParseError("no JSON object found in LLM output")
+
+
+def normalise_steps(raw_steps: Any) -> list[dict[str, Any]]:
+    """Validate, re-rank (1..n by the model's rank, stable) and cap the steps."""
+    if not isinstance(raw_steps, list):
+        raise PlaybookParseError("'steps' must be a list")
+    parsed: list[tuple[float, int, dict[str, Any]]] = []
+    for idx, item in enumerate(raw_steps):
+        if isinstance(item, str):
+            item = {"title": item}
+        if not isinstance(item, dict):
+            continue
+        fields = {
+            key: next((_text(item[a]) for a in aliases if a in item), "")
+            for key, aliases in _STEP_KEYS.items()
+        }
+        if not fields["title"]:
+            continue
+        if not fields["expected_outcome"]:
+            fields["expected_outcome"] = "Not specified by the model; verify the symptom clears."
+        try:
+            rank = float(item.get("rank", item.get("priority", idx + 1)))
+        except (TypeError, ValueError):
+            rank = float(idx + 1)
+        parsed.append((rank, idx, fields))
+    parsed.sort(key=lambda t: (t[0], t[1]))
+    steps = [{"rank": i + 1, **f} for i, (_, _, f) in enumerate(parsed[:MAX_STEPS])]
+    if len(steps) < MIN_STEPS:
+        raise PlaybookParseError(f"need at least {MIN_STEPS} valid steps, got {len(steps)}")
+    return steps
+
+
+def parse_llm_response(text: str) -> dict[str, Any]:
+    """
+    Parse raw LLM text into ``{summary, root_cause_hypothesis, steps}``.
+
+    Raises:
+        PlaybookParseError: no JSON, or fewer than 3 usable steps.
+    """
+    data = extract_json(text or "")
+    if isinstance(data, dict) and isinstance(data.get("playbook"), dict):
+        data = data["playbook"]
+    if isinstance(data, list):
+        data = {"steps": data}
+    if not isinstance(data, dict):
+        raise PlaybookParseError("LLM JSON is not an object")
+    steps = normalise_steps(data.get("steps") or data.get("remediation_steps"))
+    return {
+        "summary": _text(data.get("summary")),
+        "root_cause_hypothesis": _text(data.get("root_cause_hypothesis") or data.get("root_cause")),
+        "steps": steps,
+    }
+
+
+# ─── PlaybookGenerator / store (REQ-I) ───────────────────────────────────────
+
 
 class PlaybookGenerator:
-    """
-    Parses LLM response text into an :class:`IncidentPlaybook` and persists it.
+    """Builds IncidentPlaybooks and persists them as JSON files (ADR 0005)."""
 
-    Requirements:
-        REQ-H — Parse LLM output into a structured step list.
-        REQ-I — Assign a unique ID, persist, and expose for retrieval.
-    """
-
-    def __init__(self) -> None:
-        # In-memory store (replace with a proper DB implementation)
+    def __init__(
+        self,
+        store_dir: str | Path | None,
+        *,
+        max_count: int = 0,
+        retention_days: float = 0,
+    ) -> None:
+        self._max_count = max(0, max_count)
+        self._retention = timedelta(days=retention_days) if retention_days > 0 else None
+        self._lock = threading.RLock()
         self._store: dict[str, IncidentPlaybook] = {}
-        logger.info("PlaybookGenerator initialised (in-memory store)")
+        self._dir: Path | None = None
+        if store_dir:
+            try:
+                Path(store_dir).mkdir(parents=True, exist_ok=True)
+                self._dir = Path(store_dir)
+            except OSError as exc:
+                logger.error(
+                    "playbook store %s not writable (%s); playbooks are kept in memory only",
+                    store_dir,
+                    exc,
+                )
+        self._load()
+        self.prune()
+        logger.info(
+            "PlaybookGenerator initialised (store=%s, %d playbooks loaded)",
+            self._dir,
+            len(self._store),
+        )
 
-    def generate(self, component_id: str, llm_response: str) -> IncidentPlaybook:
+    @property
+    def persistent(self) -> bool:
+        return self._dir is not None
+
+    def _load(self) -> None:
+        if self._dir is None:
+            return
+        for path in sorted(self._dir.glob("pb-*.json")):
+            if not is_valid_playbook_id(path.stem):
+                continue
+            try:
+                pb = IncidentPlaybook.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("skipping unreadable playbook %s: %s", path.name, exc)
+                continue
+            self._store[pb.playbook_id] = pb
+
+    def _persist(self, pb: IncidentPlaybook) -> None:
+        if self._dir is not None:
+            data = json.dumps(pb.to_dict(), indent=2, ensure_ascii=False)
+            fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=".tmp-", suffix=".json")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, self._dir / f"{pb.playbook_id}.json")
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+        with self._lock:
+            self._store[pb.playbook_id] = pb
+        PLAYBOOKS_STORED.inc()
+        self.prune()
+
+    def prune(self, now: datetime | None = None) -> int:
+        """Delete playbooks older than the retention window or beyond the max count.
+
+        Oldest first; returns how many were removed. Bounds memory and disk
+        growth from repeated /diagnose calls.
         """
-        Parse the raw LLM response and produce a persisted IncidentPlaybook.
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            newest_first = sorted(
+                self._store.values(), key=lambda p: (p.generated_at, p.playbook_id), reverse=True
+            )
+            doomed = [
+                p
+                for i, p in enumerate(newest_first)
+                if (self._max_count and i >= self._max_count)
+                or (self._retention is not None and now - p.generated_at > self._retention)
+            ]
+            for p in doomed:
+                del self._store[p.playbook_id]
+        for p in doomed:
+            if self._dir is not None:
+                try:
+                    (self._dir / f"{p.playbook_id}.json").unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("could not delete pruned playbook %s: %s", p.playbook_id, exc)
+        if doomed:
+            PLAYBOOKS_PRUNED.inc(len(doomed))
+            logger.info("pruned %d playbook(s) by retention policy", len(doomed))
+        return len(doomed)
 
-        REQ-H: The system shall extract a ranked list of remediation steps
-        from the LLM JSON response, each containing ``rank``, ``title``,
-        ``command``, and ``expected_outcome``.
+    def create(
+        self,
+        component_id: str,
+        content: dict[str, Any],
+        *,
+        alert_id: str | None,
+        generated_by: str,
+    ) -> IncidentPlaybook:
+        """Persist a playbook from already-validated content."""
+        steps = normalise_steps(content["steps"])
+        pb = IncidentPlaybook(
+            playbook_id=new_playbook_id(component_id),
+            component_id=component_id,
+            summary=content.get("summary") or f"Diagnosis for {component_id}",
+            root_cause_hypothesis=content.get("root_cause_hypothesis") or "Not determined.",
+            steps=steps,
+            alert_id=alert_id,
+            generated_by=generated_by,
+        )
+        self._persist(pb)
+        return pb
 
-        REQ-I: The resulting playbook shall be persisted (linked to
-        *component_id*) and retrievable by its generated ``playbook_id``.
+    def generate(
+        self,
+        component_id: str,
+        llm_response: str,
+        *,
+        alert_id: str | None = None,
+        generated_by: str,
+    ) -> IncidentPlaybook:
+        """
+        Parse the raw LLM response and persist the resulting playbook.
 
-        Args:
-            component_id:  The component the playbook addresses.
-            llm_response:  Raw text response from the LLM.
-
-        Returns:
-            A fully populated and persisted :class:`IncidentPlaybook`.
+        REQ-H: >= 3 ranked steps of {rank, title, command, expected_outcome}.
+        REQ-I: persisted, linked to *alert_id*, retrievable by playbook_id.
 
         Raises:
-            NotImplementedError: until implemented.
+            PlaybookParseError: the response is not a usable playbook.
         """
-        # TODO: implement — REQ-H, REQ-I
-        #   1. Parse llm_response as JSON (handle fallback plain-text parsing)
-        #   2. Extract steps list from parsed JSON
-        #   3. Generate playbook_id (e.g. f"pb-{component_id}-{uuid4().hex[:8]}")
-        #   4. Instantiate IncidentPlaybook(playbook_id, steps)
-        #   5. Persist to self._store[playbook_id]
-        #   6. Return playbook
-        raise NotImplementedError("TODO: implement generate — REQ-H, REQ-I")
+        return self.create(
+            component_id,
+            parse_llm_response(llm_response),
+            alert_id=alert_id,
+            generated_by=generated_by,
+        )
 
     def get(self, playbook_id: str) -> IncidentPlaybook | None:
-        """
-        Retrieve a persisted playbook by its ID.
+        """REQ-I: playbook by ID; None if missing or the ID is malformed."""
+        if not is_valid_playbook_id(playbook_id):
+            return None
+        with self._lock:
+            pb = self._store.get(playbook_id)
+        if pb is None and self._dir is not None:
+            # written by another replica / process since startup
+            path = self._dir / f"{playbook_id}.json"
+            if path.is_file():
+                try:
+                    pb = IncidentPlaybook.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, ValueError, KeyError, TypeError):
+                    return None
+                with self._lock:
+                    self._store[playbook_id] = pb
+        return pb
 
-        REQ-I: Returns ``None`` if no playbook with *playbook_id* exists.
+    def list(
+        self, alert_id: str | None = None, component_id: str | None = None
+    ) -> list[IncidentPlaybook]:
+        """Playbooks filtered by alert/component, newest first."""
+        with self._lock:
+            items = [
+                p
+                for p in self._store.values()
+                if (not alert_id or p.alert_id == alert_id)
+                and (not component_id or p.component_id == component_id)
+            ]
+        return sorted(items, key=lambda p: (p.generated_at, p.playbook_id), reverse=True)
 
-        Args:
-            playbook_id: Unique playbook identifier.
-
-        Returns:
-            The :class:`IncidentPlaybook` if found, else ``None``.
-
-        Raises:
-            NotImplementedError: until implemented.
-        """
-        # TODO: implement — REQ-I
-        raise NotImplementedError("TODO: implement get — REQ-I")
+    def find_by_alert(self, alert_id: str) -> IncidentPlaybook | None:
+        items = self.list(alert_id=alert_id)
+        return items[0] if items else None

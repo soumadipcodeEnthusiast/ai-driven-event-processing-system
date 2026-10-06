@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/predictive-alert.schema.json",
+  "title": "PredictiveAlert",
+  "description": "Forecast-driven alert emitted by forecasting-service and served by `GET /alerts` and `GET /alerts/{alert_id}` (docs/CONTRACTS.md §3). Emitted for any predicted p90 breach in the horizon; lead_time_minutes below ALERT_MIN_LEAD_MINUTES (default 10) marks a late warning against the REQ-E target. Severity derives from the peak p90 overshoot of the threshold: <10% low, <25% medium, <50% high, >=50% critical. At most one alert with status `open` exists per (component_id, metric_name).",
+  "type": "object",
+  "required": [
+    "alert_id", "component_id", "metric_name", "predicted_breach_time", "predicted_value",
+    "threshold", "lead_time_minutes", "severity", "status", "created_at", "model_version", "playbook_id"
+  ],
+  "properties": {
+    "alert_id": { "type": "string", "pattern": "^al-[0-9a-f]{12}$" },
+    "component_id": { "$ref": "#/$defs/componentId" },
+    "metric_name": { "type": "string", "minLength": 1, "description": "Logical metric name as configured in config/components.yaml, e.g. `cpu`, `memory`, `error_rate`." },
+    "predicted_breach_time": { "$ref": "#/$defs/utcDateTime", "description": "UTC time at which the p90 forecast first crosses the threshold." },
+    "predicted_value": { "type": "number", "description": "Peak forecast (p90) value within the horizon; drives severity." },
+    "threshold": { "type": "number", "description": "Threshold in force when the alert was created." },
+    "lead_time_minutes": { "type": "number", "minimum": 0, "description": "Minutes between created_at and predicted_breach_time." },
+    "severity": { "enum": ["low", "medium", "high", "critical"] },
+    "status": { "enum": ["open", "acknowledged", "resolved"] },
+    "created_at": { "$ref": "#/$defs/utcDateTime" },
+    "model_version": { "type": "string", "minLength": 1, "description": "Forecaster identity/version, e.g. TFT_MODEL_VERSION or `statistical-<ver>`." },
+    "playbook_id": {
+      "description": "Set once diagnostic-service returns a playbook; null until then (or if the hand-off failed).",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^pb-[a-z0-9][a-z0-9-]*-[0-9a-f]{8}$" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "componentId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Monitored component id. Known ids: ingestion-service, forecasting-service, diagnostic-service, kafka, zookeeper, prometheus, graph-db, llm. Kept open (not an enum) so new components can be added via config/components.yaml without a schema change.",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "utcDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 date-time; `Z` or `+00:00` suffix (Python datetime.isoformat() emits `+00:00`).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|\\+00:00)$"
+    }
+  }
+}
