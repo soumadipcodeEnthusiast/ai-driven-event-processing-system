@@ -1,0 +1,16 @@
+# Grafana dashboard provider (mounted at /etc/grafana/provisioning).
+# Dashboard JSON lives in infra/grafana/dashboards → /var/lib/grafana/dashboards.
+apiVersion: 1
+
+providers:
+  - name: aiops
+    orgId: 1
+    folder: AIOps
+    folderUid: aiops
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
