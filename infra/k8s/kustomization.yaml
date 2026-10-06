@@ -1,0 +1,27 @@
+# Applied via infra/kustomization.yaml (kubectl apply -k infra), which also
+# generates the prometheus-config and prometheus-rules ConfigMaps.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: event-processor
+
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - ingestion-deployment.yaml
+  - forecasting-deployment.yaml
+  - diagnostic-deployment.yaml
+  - hpa.yaml
+  - prometheus.yaml
+
+# Point at your registry / tags here (or `kustomize edit set image ...` in CD).
+images:
+  - name: ghcr.io/your-org/ingestion-service
+    newTag: latest
+  - name: ghcr.io/your-org/forecasting-service
+    newTag: latest
+  - name: ghcr.io/your-org/diagnostic-service
+    newTag: latest
