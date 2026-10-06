@@ -1,28 +1,47 @@
 package com.eventproc.ingestion.consumer;
 
+import com.eventproc.ingestion.config.IngestionKafkaProperties;
+import com.eventproc.ingestion.exception.SchemaValidationException;
+import com.eventproc.ingestion.kafka.DeadLetters;
+import com.eventproc.ingestion.metrics.IngestionMetrics;
 import com.eventproc.ingestion.model.NormalizedEvent;
 import com.eventproc.ingestion.service.NormalizationService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Timer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 /**
- * Kafka consumer that ingests raw event messages from the configured input
- * topic and delegates to {@link NormalizationService} for validation and
- * normalisation.
+ * Consumes {@code raw-events}, normalises each record and publishes it to
+ * {@code normalized-events} keyed by {@code event_id}; invalid records go to the DLT.
  *
- * <p>Implements operations from the {@code IngestionService} class in the
- * class diagram.
+ * <p><b>Delivery (REQ-A):</b> at-least-once. Records of a poll are processed in order and
+ * their produce requests pipelined; the batch is acknowledged ({@code MANUAL_IMMEDIATE})
+ * only after the broker has confirmed every produced record. If a send fails or an
+ * unexpected error occurs at index {@code i}, all earlier sends are awaited and a
+ * {@link BatchListenerFailedException} for {@code i} is thrown: the error handler commits
+ * offsets before {@code i}, retries from {@code i} with back-off and finally dead-letters it.
  *
- * <p>Requirements covered:
- * <ul>
- *   <li>REQ-A — Real-time event ingestion from Kafka</li>
- *   <li>REQ-B — Schema validation prior to processing</li>
- * </ul>
+ * <p><b>Validation (REQ-B):</b> contract violations are deterministic, so they are not
+ * retried — the original bytes go straight to the DLT with an {@code x-error-reason} header
+ * and a structured WARN log carrying partition and offset.
+ *
+ * <p><b>Normalisation (REQ-C):</b> delegated to {@link NormalizationService}.
  */
 @Component
 public class EventConsumer {
@@ -30,70 +49,106 @@ public class EventConsumer {
     private static final Logger log = LoggerFactory.getLogger(EventConsumer.class);
 
     private final NormalizationService normalizationService;
+    private final KafkaTemplate<String, byte[]> kafkaTemplate;
+    private final ObjectMapper objectMapper;
+    private final IngestionMetrics metrics;
+    private final IngestionKafkaProperties props;
 
-    @Autowired
-    public EventConsumer(NormalizationService normalizationService) {
+    public EventConsumer(NormalizationService normalizationService,
+                         KafkaTemplate<String, byte[]> kafkaTemplate,
+                         ObjectMapper objectMapper,
+                         IngestionMetrics metrics,
+                         IngestionKafkaProperties props) {
         this.normalizationService = normalizationService;
+        this.kafkaTemplate = kafkaTemplate;
+        this.objectMapper = objectMapper;
+        this.metrics = metrics;
+        this.props = props;
     }
 
-    // ── Public API ────────────────────────────────────────────────────────
-
-    /**
-     * Consumes a raw event record from the Kafka input topic.
-     *
-     * <p><b>REQ-A</b>: The system shall ingest events from Kafka with
-     * at-least-once delivery semantics and manual offset commit.
-     *
-     * <p><b>REQ-B</b>: The consumer shall validate the raw message against
-     * the registered schema before forwarding to normalisation.
-     *
-     * @param record         Kafka consumer record containing the raw event JSON
-     * @param acknowledgment Spring Kafka manual acknowledgment handle
-     */
     @KafkaListener(
+        id = "ingestion-consumer",
         topics = "${app.kafka.input-topic}",
         groupId = "${spring.kafka.consumer.group-id}",
         containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consume(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
-        // TODO: implement
-        //   1. Deserialise record.value() from JSON
-        //   2. Call validate(rawJson)
-        //   3. Call normalizationService.normalize(rawPayload)
-        //   4. Publish NormalizedEvent to output topic
-        //   5. Call acknowledgment.acknowledge()
-        //   6. On validation failure: route to dead-letter topic, still ack
-        throw new UnsupportedOperationException("TODO: implement consume — REQ-A, REQ-B");
+    public void consume(List<ConsumerRecord<String, byte[]>> records, Acknowledgment acknowledgment) {
+        List<PendingSend> pending = new ArrayList<>(records.size());
+        for (int i = 0; i < records.size(); i++) {
+            ConsumerRecord<String, byte[]> record = records.get(i);
+            // Timed from parse until the broker confirms the send (see awaitAll),
+            // so the REQ-A latency SLO sees produce/broker slowness too.
+            Timer.Sample sample = metrics.startTimer();
+            try {
+                pending.add(handle(record, i, sample));
+            } catch (RuntimeException ex) {
+                metrics.stopTimer(sample);
+                awaitAll(pending, records);
+                throw new BatchListenerFailedException(
+                        "unexpected error processing " + coordinates(record), ex, i);
+            }
+        }
+        awaitAll(pending, records);
+        acknowledgment.acknowledge();
+    }
+
+    // ── Internals ─────────────────────────────────────────────────────────
+
+    private PendingSend handle(ConsumerRecord<String, byte[]> record, int index, Timer.Sample sample) {
+        try {
+            NormalizedEvent event = normalizationService.process(record.value());
+            return new PendingSend(index, Outcome.VALID, sample,
+                    kafkaTemplate.send(props.outputTopic(), event.getEventId(), serialize(event)));
+        } catch (SchemaValidationException e) {
+            log.warn("event=ingestion_rejected topic={} partition={} offset={} key={} errors={} reason=\"{}\"",
+                    record.topic(), record.partition(), record.offset(), record.key(),
+                    e.getErrors().size(), e.getMessage());
+            return new PendingSend(index, Outcome.INVALID, sample,
+                    kafkaTemplate.send(DeadLetters.record(props.deadLetterTopic(), record, e.getMessage())));
+        }
+    }
+
+    private byte[] serialize(NormalizedEvent event) {
+        try {
+            return objectMapper.writeValueAsBytes(event);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("failed to serialise normalised event " + event.getEventId(), e);
+        }
     }
 
     /**
-     * Validates the raw JSON payload against the expected event schema.
-     *
-     * <p><b>REQ-B</b>: Validation shall reject events missing mandatory fields
-     * ({@code event_id}, {@code timestamp}, {@code source}) and log a
-     * structured error with the partition and offset.
-     *
-     * @param rawJson raw event JSON string received from Kafka
-     * @return {@code true} if the payload is structurally valid
-     * @throws com.eventproc.ingestion.exception.SchemaValidationException
-     *         if the payload violates the schema
+     * Blocks until every pending send is acknowledged, recording outcome metrics.
+     * On the first failure throws {@link BatchListenerFailedException} for that record.
      */
-    public boolean validate(String rawJson) {
-        // TODO: implement — REQ-B
-        throw new UnsupportedOperationException("TODO: implement validate — REQ-B");
+    private void awaitAll(List<PendingSend> pending, List<ConsumerRecord<String, byte[]>> records) {
+        long timeoutMs = props.sendTimeout().toMillis();
+        for (PendingSend p : pending) {
+            try {
+                p.future().get(timeoutMs, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BatchListenerFailedException("interrupted awaiting send", e, p.index());
+            } catch (ExecutionException | TimeoutException e) {
+                Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
+                throw new BatchListenerFailedException(
+                        "send failed for " + coordinates(records.get(p.index())), cause, p.index());
+            }
+            metrics.stopTimer(p.sample());
+            if (p.outcome() == Outcome.VALID) {
+                metrics.valid();
+            } else {
+                metrics.invalid();
+            }
+        }
+        pending.clear();
     }
 
-    /**
-     * Triggers normalisation of a validated raw payload.
-     *
-     * <p><b>REQ-B</b>: After validation passes the event is forwarded to
-     * {@link NormalizationService#normalize(java.util.Map)} for field mapping.
-     *
-     * @param rawJson validated raw event JSON string
-     * @return {@link NormalizedEvent} produced by the normalisation service
-     */
-    public NormalizedEvent normalize(String rawJson) {
-        // TODO: implement — REQ-B
-        throw new UnsupportedOperationException("TODO: implement normalize — REQ-B");
+    private static String coordinates(ConsumerRecord<?, ?> r) {
+        return r.topic() + "-" + r.partition() + "@" + r.offset();
     }
+
+    private enum Outcome { VALID, INVALID }
+
+    private record PendingSend(int index, Outcome outcome, Timer.Sample sample,
+                               CompletableFuture<SendResult<String, byte[]>> future) {}
 }
