@@ -1,0 +1,10 @@
+# Build artefacts are produced inside the image; never send local ones.
+target/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+*.log
+*.md
+Dockerfile
+.dockerignore
