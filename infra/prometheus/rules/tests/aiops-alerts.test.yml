@@ -1,0 +1,135 @@
+# promtool unit tests for key alerts.
+#   promtool test rules infra/prometheus/rules/tests/*.yml
+rule_files:
+  - ../aiops-recording.yml
+  - ../aiops-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── ServiceDown ────────────────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="ingestion-service", service="ingestion-service", instance="ingestion-service:8080"}'
+        values: '1 1 0 0 0 0'
+      - series: 'up{job="forecasting-service", service="forecasting-service", instance="forecasting-service:8081"}'
+        values: '1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: ingestion-service
+              service: ingestion-service
+              instance: ingestion-service:8080
+            exp_annotations:
+              summary: "ingestion-service is down (Prometheus scrape failing)"
+              description: "Prometheus has failed to scrape ingestion-service (ingestion-service:8080) for more than 1 minute."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/service-down.md"
+
+  # ── IngestionConsumerLagHigh (REQ-A: 5000 records ≈ 500 ms @ 10k ev/s) ─────
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumer_fetch_manager_records_lag_max{service="ingestion-service", client_id="consumer-1"}'
+        values: '6000x25'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: IngestionConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: IngestionConsumerLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: ingestion-service
+            exp_annotations:
+              summary: "Ingestion consumer lag > 5000 records (> 500 ms at 10k ev/s, REQ-A)"
+              description: "Max records lag is 6000 records for 5 minutes."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-consumer-lag-high.md"
+
+  # ── DiagnosticFallbackRatioHigh fires when an LLM is configured but failing ──
+  - interval: 1m
+    input_series:
+      - series: 'diagnoses_total{service="diagnostic-service", outcome="fallback"}'
+        values: '0+10x60'
+      - series: 'diagnoses_total{service="diagnostic-service", outcome="ok"}'
+        values: '0+1x60'
+      - series: 'llm_failures_total{service="diagnostic-service", provider="ollama"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: DiagnosticFallbackRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: diagnostic-service
+            exp_annotations:
+              summary: "More than 50% of diagnoses fell back to rule-based playbooks (LLM degraded)"
+              description: "Fallback ratio is 90.91% over 30m while an LLM provider is configured."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/diagnostic-fallback-ratio-high.md"
+
+  # ── ...but stays silent when LLM_PROVIDER=none (100% fallback is expected) ───
+  - interval: 1m
+    input_series:
+      - series: 'diagnoses_total{service="diagnostic-service", outcome="fallback"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: DiagnosticFallbackRatioHigh
+        exp_alerts: []
+
+  # ── PredictiveAlertCritical catches a brand-new labelled series ──────────────
+  - interval: 1m
+    input_series:
+      - series: 'predictive_alerts_total{service="forecasting-service", component="kafka", severity="critical"}'
+        values: '_x5 1x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PredictiveAlertCritical
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PredictiveAlertCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: forecasting-service
+              component: kafka
+            exp_annotations:
+              summary: "Critical predicted breach for kafka"
+              description: "The forecasting service predicts a >= 50% threshold overshoot for kafka. Open the AIOps Overview dashboard for the alert and its playbook."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/predictive-alert-critical.md"
+              dashboard: "http://localhost:3000/d/aiops-overview"
+      - eval_time: 18m
+        alertname: PredictiveAlertCritical
+        exp_alerts: []
+
+  # ── ForecastLoopStalled ──────────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="forecasting-service", service="forecasting-service", instance="forecasting-service:8081"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ForecastLoopStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: forecasting-service
+            exp_annotations:
+              summary: "Forecasting background loop has not run in 10+ minutes"
+              description: "forecasting-service is up but recorded no forecast runs in 10m; no PredictiveAlerts can be emitted."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-loop-stalled.md"
+  - interval: 1m
+    input_series:
+      - series: 'up{job="forecasting-service", service="forecasting-service", instance="forecasting-service:8081"}'
+        values: '1x30'
+      - series: 'forecast_runs_total{service="forecasting-service", component="kafka", outcome="ok"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForecastLoopStalled
+        exp_alerts: []
