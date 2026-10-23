@@ -6,8 +6,11 @@ import sys
 
 OUT = sys.argv[1]
 PROM = {"type": "prometheus", "uid": "prometheus"}
-INF = {"type": "yesoreyeram-infinity-datasource", "uid": "infinity"}
 RB = "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/"
+# The yesoreyeram-infinity-datasource plugin (and the aiops-overview dashboard
+# that used it to read /alerts and /playbooks) is removed along with the
+# GraphRAG/LLM/playbook design — see docs/adr/0008. REQ-034 (dashboard with
+# real-time throughput/error rates) is now served by service-health alone.
 
 _id = [0]
 
@@ -87,7 +90,6 @@ def dashboard(uid, title, panels, refresh, tags, variables=None, time_from="now-
 
 def nav_links():
     return [
-        {"title": "AIOps Overview", "type": "link", "url": "/d/aiops-overview", "icon": "dashboard"},
         {"title": "Service Health", "type": "link", "url": "/d/aiops-service-health", "icon": "dashboard"},
         {"title": "SLOs", "type": "link", "url": "/d/aiops-slo", "icon": "dashboard"},
         {"title": "Runbooks", "type": "link", "url": RB + "runbooks/README.md", "icon": "doc",
@@ -95,15 +97,6 @@ def nav_links():
     ]
 
 
-SEV_MAP = [{"type": "value", "options": {
-    "low": {"color": "blue", "index": 0, "text": "low"},
-    "medium": {"color": "yellow", "index": 1, "text": "medium"},
-    "high": {"color": "orange", "index": 2, "text": "high"},
-    "critical": {"color": "red", "index": 3, "text": "critical"}}}]
-STATUS_MAP = [{"type": "value", "options": {
-    "open": {"color": "red", "index": 0, "text": "open"},
-    "acknowledged": {"color": "yellow", "index": 1, "text": "acknowledged"},
-    "resolved": {"color": "green", "index": 2, "text": "resolved"}}}]
 OUTCOME_COLORS = {"ok": "green", "valid": "green", "fallback": "orange", "invalid": "yellow", "error": "red"}
 SEV_COLORS = {"low": "blue", "medium": "yellow", "high": "orange", "critical": "red"}
 
@@ -114,34 +107,7 @@ def color_by_name(colors):
             for k, v in colors.items()]
 
 
-def inf(url, columns, root="", ref="A"):
-    return {"refId": ref, "datasource": INF, "type": "json", "source": "url", "parser": "backend",
-            "format": "table", "url": url, "url_options": {"method": "GET", "data": ""},
-            "root_selector": root, "filters": [],
-            "columns": [{"selector": s, "text": s, "type": t} for s, t in columns]}
-
-
-ALERT_COLS = [("alert_id", "string"), ("component_id", "string"), ("metric_name", "string"),
-              ("severity", "string"), ("status", "string"), ("predicted_breach_time", "timestamp"),
-              ("lead_time_minutes", "number"), ("predicted_value", "number"), ("threshold", "number"),
-              ("created_at", "timestamp"), ("model_version", "string"), ("playbook_id", "string")]
-PLAYBOOK_COLS = [("playbook_id", "string"), ("alert_id", "string"), ("component_id", "string"),
-                 ("summary", "string"), ("root_cause_hypothesis", "string"), ("generated_by", "string"),
-                 ("generated_at", "timestamp")]
-
-
-def playbook_links(field="playbook_id"):
-    return [
-        {"title": "Open playbook in this dashboard",
-         "url": "/d/aiops-overview/aiops-overview?var-playbook_id=${__data.fields.%s}"
-                "&var-alert_status=${alert_status}&${__url_time_range}" % field},
-        {"title": "Open playbook (Markdown, diagnostic-service)",
-         "url": "http://localhost:8082/playbook/${__data.fields.%s}?format=markdown" % field,
-         "targetBlank": True},
-    ]
-
-
-def table(title, x, y, w, h, targets, desc="", overrides=None, links=None, ds=INF, sort=None):
+def table(title, x, y, w, h, targets, desc="", overrides=None, links=None, ds=PROM, sort=None):
     d = {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": True,
                     "filterable": True},
          "thresholds": thresholds(("green", None))}
@@ -167,88 +133,10 @@ def col_width(name, width):
             "properties": [{"id": "custom.width", "value": width}]}
 
 
-# ════════════════════════════ aiops-overview (REQ-K) ════════════════════════════
-_id[0] = 0
-P = []
-P.append(stat("Open predictive alerts", 0, 0, 4, 4, [prom("sum(predictive_alerts_open) or vector(0)", instant=True)],
-              desc="Gauge predictive_alerts_open from forecasting-service.",
-              thr=thresholds(("green", None), ("orange", 1), ("red", 5))))
-P.append(stat("Alerts emitted (24h) by severity", 4, 0, 6, 4,
-              [prom("sum by (severity) (increase(predictive_alerts_total[24h]))", "{{severity}}", instant=True)],
-              desc="predictive_alerts_total{severity} increase over 24h.", color_mode="value",
-              overrides=color_by_name(SEV_COLORS)))
-P.append(stat("Diagnoses (24h) by outcome", 10, 0, 5, 4,
-              [prom("sum by (outcome) (increase(diagnoses_total[24h]))", "{{outcome}}", instant=True)],
-              desc="ok = LLM playbook, fallback = rule-based playbook, error = no playbook.",
-              color_mode="value", overrides=color_by_name(OUTCOME_COLORS)))
-P.append(stat("Diagnostic fallback ratio (30m)", 15, 0, 3, 4,
-              [prom("service:diagnoses_fallback:ratio_rate30m", instant=True)], unit="percentunit",
-              desc="Share of playbooks generated by the rule-based fallback (LLM degraded or LLM_PROVIDER=none).",
-              thr=thresholds(("green", None), ("orange", 0.25), ("red", 0.5))))
-P.append(stat("Time to next predicted breach", 18, 0, 3, 4,
-              [inf("http://forecasting-service:8081/alerts/summary",
-                   [("min_minutes_to_breach", "number"), ("next_breach_component", "string")])],
-              unit="m", desc="Minutes until the soonest predicted breach among open/acknowledged alerts, "
-                             "computed live by GET /alerts/summary (negative = predicted time has passed). "
-                             "Red below 10 min: act now (REQ-E target lead time). Empty = no active alerts.",
-              calcs=("min",), fields="/^min_minutes_to_breach$/", ds=INF,
-              thr=thresholds(("red", None), ("orange", 10), ("green", 30))))
-P.append(stat("Forecaster", 21, 0, 3, 4,
-              [prom("max by (forecaster, model_version) (forecaster_info)", "{{forecaster}} {{model_version}}",
-                    instant=True)],
-              desc="forecaster_info: TFT or statistical fallback, and model version.", text_mode="name",
-              color_mode="none"))
-P.append(table(
-    "Live predictive alerts (refresh 5 s) — click a row to open its playbook", 0, 4, 24, 10,
-    [inf("http://forecasting-service:8081/alerts?status=${alert_status}&limit=100", ALERT_COLS)],
-    desc="REQ-K live feed: GET forecasting-service /alerts (newest first). Dashboard refresh is 5 s, so a new "
-         "PredictiveAlert appears within 5 s of emission. Each cell links to the alert's IncidentPlaybook.",
-    links=playbook_links(),
-    overrides=[col_color("severity", SEV_MAP, 90), col_color("status", STATUS_MAP, 110),
-               col_width("alert_id", 150), col_width("lead_time_minutes", 140),
-               {"matcher": {"id": "byName", "options": "lead_time_minutes"},
-                "properties": [{"id": "unit", "value": "m"}, {"id": "thresholds", "value": thresholds(
-                    ("red", None), ("green", 10))}, {"id": "custom.cellOptions",
-                                                    "value": {"type": "color-text"}}]}],
-    sort=[{"displayName": "created_at", "desc": True}]))
-P.append(table(
-    "Incident playbooks", 0, 14, 24, 8,
-    [inf("http://diagnostic-service:8082/playbooks", PLAYBOOK_COLS)],
-    desc="GET diagnostic-service /playbooks. generated_by = '<provider>:<model>' or 'fallback:rule-based'.",
-    links=playbook_links(), overrides=[col_width("playbook_id", 260), col_width("alert_id", 150),
-                                       col_width("generated_by", 200)],
-    sort=[{"displayName": "generated_at", "desc": True}]))
-P.append(row("Selected playbook: ${playbook_id}", 22))
-P.append(table(
-    "Playbook ${playbook_id}", 0, 23, 24, 5,
-    [inf("http://diagnostic-service:8082/playbook/${playbook_id}",
-         [("playbook_id", "string"), ("alert_id", "string"), ("component_id", "string"), ("summary", "string"),
-          ("root_cause_hypothesis", "string"), ("generated_by", "string"), ("generated_at", "timestamp")])],
-    desc="GET diagnostic-service /playbook/{id}. Select a playbook by clicking a row in the tables above "
-         "(or type an id into the playbook_id variable).",
-    links=[{"title": "Open as Markdown",
-            "url": "http://localhost:8082/playbook/${playbook_id}?format=markdown", "targetBlank": True}]))
-P.append(table(
-    "Ranked remediation steps (REQ-H: >= 3)", 0, 28, 24, 9,
-    [inf("http://diagnostic-service:8082/playbook/${playbook_id}",
-         [("rank", "number"), ("title", "string"), ("command", "string"), ("expected_outcome", "string")],
-         root="steps")],
-    desc="IncidentPlaybook.steps ordered by rank.", overrides=[col_width("rank", 60)],
-    sort=[{"displayName": "rank", "desc": False}]))
-
-overview_vars = [
-    {"type": "custom", "name": "alert_status", "label": "Alert status", "query": "open,acknowledged,resolved",
-     "current": {"selected": True, "text": "open", "value": "open"},
-     "options": [{"selected": s == "open", "text": s, "value": s} for s in ("open", "acknowledged", "resolved")],
-     "multi": False, "includeAll": False, "hide": 0},
-    {"type": "textbox", "name": "playbook_id", "label": "Playbook", "query": "",
-     "current": {"selected": False, "text": "", "value": ""}, "options": [], "hide": 0},
-]
-overview = dashboard("aiops-overview", "AIOps Overview — Predictive Alerts & Playbooks", P, "5s",
-                     ["aiops", "req-k"], overview_vars, "now-6h", nav_links(),
-                     "REQ-K: live PredictiveAlert feed with links to IncidentPlaybooks.")
-
-# ════════════════════════════ service-health ════════════════════════════
+# ════════════════════════════ service-health (REQ-034) ══════════════════════════
+# This is now the only dashboard (the former aiops-overview, which read /alerts
+# and /playbooks via the Infinity datasource and linked alerts to playbooks, is
+# removed along with that design — see docs/adr/0008).
 _id[0] = 0
 P = []
 UP_MAP = [{"type": "value", "options": {"0": {"color": "red", "index": 0, "text": "DOWN"},
@@ -271,19 +159,19 @@ P.append(table("Firing Prometheus alerts", 14, 1, 10, 4,
                    "properties": [{"id": "custom.hidden", "value": True}]}
                   for n in ("Time", "Value", "__name__", "alertstate", "environment", "project")]))
 
-P.append(row("Ingestion service (REQ-A / REQ-B)", 5))
+P.append(row("Ingestion service (REQ-001 / REQ-004 / REQ-005)", 5))
 P.append(ts("Ingestion throughput by outcome", 0, 6, 8, 8,
             [prom("outcome:ingestion_events:rate1m", "{{outcome}}")], unit="ops",
             desc="ingestion_events_total rate. invalid = routed to raw-events.DLT; error = unexpected failure.",
             overrides=color_by_name(OUTCOME_COLORS), stack=True))
 P.append(ts("Kafka consumer lag (records, max)", 8, 6, 8, 8,
             [prom("service:kafka_consumer_records_lag:max", "max lag")], unit="short",
-            desc="kafka_consumer_fetch_manager_records_lag_max. REQ-A: 5000 records = 500 ms at 10k ev/s.",
+            desc="kafka_consumer_fetch_manager_records_lag_max. REQ-001/REQ-004: 5000 records = 500 ms at 10k ev/s.",
             thr=thresholds(("transparent", None), ("orange", 1000), ("red", 5000))))
 P.append(ts("Processing latency p95 / p99", 16, 6, 8, 8,
             [prom("service:ingestion_processing_seconds:p95_5m", "p95"),
              prom("service:ingestion_processing_seconds:p99_5m", "p99", ref="B")], unit="s",
-            desc="ingestion_processing_seconds histogram. REQ-A budget 500 ms.",
+            desc="ingestion_processing_seconds histogram. REQ-004 budget 500 ms.",
             thr=thresholds(("transparent", None), ("red", 0.5))))
 P.append(ts("HTTP requests (actuator) by status", 0, 14, 8, 7,
             [prom('sum by (status) (rate(http_server_requests_seconds_count{service="ingestion-service"}[5m]))',
@@ -297,50 +185,67 @@ P.append(ts("JVM heap / non-heap", 16, 14, 8, 7,
              prom('sum by (area) (jvm_memory_max_bytes{service="ingestion-service", area="heap"} > 0)',
                   "max {{area}}", ref="B")], unit="bytes"))
 
-P.append(row("Forecasting service (REQ-D / REQ-E)", 21))
-P.append(ts("Forecast runs by component / outcome", 0, 22, 8, 8,
+P.append(row("Forecasting service / Predictive Analytics (REQ-021 / REQ-025)", 21))
+P.append(stat("Open predictive alerts", 0, 22, 4, 4, [prom("sum(predictive_alerts_open) or vector(0)", instant=True)],
+              desc="Gauge predictive_alerts_open from forecasting-service.",
+              thr=thresholds(("green", None), ("orange", 1), ("red", 5))))
+P.append(stat("Forecaster", 4, 22, 4, 4,
+              [prom("max by (forecaster, model_version) (forecaster_info)", "{{forecaster}} {{model_version}}",
+                    instant=True)],
+              desc="forecaster_info: ML model or statistical fallback, and model version.", text_mode="name",
+              color_mode="none"))
+P.append(ts("Forecast runs by component / outcome", 8, 22, 8, 8,
             [prom("component_outcome:forecast_runs:rate5m", "{{component}} {{outcome}}")], unit="ops",
             desc="forecast_runs_total rate."))
-P.append(ts("Forecast latency p95", 8, 22, 8, 8,
+P.append(ts("Forecast latency p95", 16, 22, 8, 8,
             [prom("service:forecast_latency_seconds:p95_5m", "p95")], unit="s",
-            desc="forecast_latency_seconds. REQ-D: < 2 s for a 60-min window.",
+            desc="forecast_latency_seconds. REQ-021: < 2 s for a 60-min window.",
             thr=thresholds(("transparent", None), ("red", 2))))
-P.append(ts("Predictive alerts emitted by severity", 16, 22, 8, 8,
+P.append(ts("Predictive alerts emitted by severity", 0, 30, 12, 8,
             [prom("sum by (severity) (increase(predictive_alerts_total[5m]))", "{{severity}}"),
              prom("sum(predictive_alerts_open)", "open (gauge)", ref="B")], unit="short",
             overrides=color_by_name(SEV_COLORS)))
 
-P.append(row("Diagnostic service (REQ-G / REQ-H / REQ-I)", 30))
-P.append(ts("Diagnoses by outcome", 0, 31, 6, 8,
-            [prom("sum by (outcome) (increase(diagnoses_total[5m]))", "{{outcome}}")], unit="short",
-            overrides=color_by_name(OUTCOME_COLORS), stack=True))
-P.append(ts("Diagnosis latency p95", 6, 31, 6, 8,
-            [prom("service:diagnosis_latency_seconds:p95_5m", "diagnosis p95")], unit="s",
-            thr=thresholds(("transparent", None), ("red", 30))))
-P.append(ts("LLM latency p95 / failures", 12, 31, 6, 8,
-            [prom("provider:llm_request_seconds:p95_5m", "p95 {{provider}}"),
-             prom("sum by (provider) (increase(llm_failures_total[5m]))", "failures {{provider}}", ref="B")],
-            unit="s", overrides=[{"matcher": {"id": "byFrameRefID", "options": "B"},
-                                  "properties": [{"id": "unit", "value": "short"},
-                                                 {"id": "custom.axisPlacement", "value": "right"},
-                                                 {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]}]))
-P.append(ts("Graph context latency p95 (REQ-G)", 18, 31, 6, 8,
-            [prom("service:graph_context_seconds:p95_5m", "p95")], unit="s",
+# Anomaly Detection (REQ-016 to REQ-020, docs/adr/0008). The earlier GraphRAG/
+# LLM/playbook panels are retired along with that design.
+P.append(row("Diagnostic service — Anomaly Detection (REQ-016 to REQ-020)", 38))
+P.append(ts("Anomaly scores", 0, 39, 6, 8,
+            [prom("histogram_quantile(0.95, sum by (le) (rate(anomaly_score_bucket[5m])))", "p95"),
+             prom("max(anomaly_threshold)", "threshold", ref="B")], unit="short",
+            desc="anomaly_score histogram (REQ-016) against the runtime threshold (REQ-020)."))
+P.append(ts("Events scored", 6, 39, 6, 8,
+            [prom("sum by (source) (rate(anomaly_events_scored_total[5m]))", "{{source}}")], unit="ops",
+            desc="Events scored per second: kafka = normalized-events consumer, http = POST /score."))
+P.append(ts("Anomalies detected", 12, 39, 6, 8,
+            [prom("service:anomalies_detected:rate5m", "detected/s")], unit="ops",
+            desc="anomalies_detected_total rate (REQ-017)."))
+P.append(ts("Audit-publish failures", 18, 39, 6, 8,
+            [prom("service:anomaly_audit_publish_failures:increase30m", "failures/30m")], unit="short",
+            desc="anomaly_audit_publish_failures_total (REQ-019).",
             thr=thresholds(("transparent", None), ("red", 1))))
-P.append(ts("Playbooks stored", 0, 39, 8, 6,
-            [prom("sum(increase(playbooks_stored_total[5m]))", "stored / 5m")], unit="short"))
 
-P.append(row("Process resources", 45))
-P.append(ts("Resident memory", 0, 46, 12, 7,
-            [prom('sum by (service) (process_resident_memory_bytes{service=~".+-service"})', "{{service}}")],
+P.append(row("Archival — Kafka → S3 (REQ-028)", 47))
+P.append(ts("Records archived", 0, 48, 12, 7,
+            [prom("topic:archive_records:rate5m", "{{topic}}")], unit="ops",
+            desc="archive_records_total rate per topic (raw-events, normalized-events)."))
+P.append(ts("S3 upload failures / last success age", 12, 48, 12, 7,
+            [prom("service:archive_failures:increase15m", "failures/15m"),
+             prom("time() - max(archive_last_success_timestamp_seconds)", "seconds since last upload",
+                  ref="B")], unit="short",
+            desc="Failed batches are rewound and retried; EventArchiveStalled fires after 15 min without an upload."))
+
+P.append(row("Process resources", 55))
+P.append(ts("Resident memory", 0, 56, 12, 7,
+            [prom('sum by (service) (process_resident_memory_bytes{service=~".+-(service|archiver)"})', "{{service}}")],
             unit="bytes"))
-P.append(ts("CPU", 12, 46, 12, 7,
-            [prom('sum by (service) (rate(process_cpu_seconds_total{service=~".+-service"}[5m]))', "{{service}}"),
+P.append(ts("CPU", 12, 56, 12, 7,
+            [prom('sum by (service) (rate(process_cpu_seconds_total{service=~".+-(service|archiver)"}[5m]))', "{{service}}"),
              prom('max by (service) (process_cpu_usage{service="ingestion-service"})', "{{service}}", ref="B")],
             unit="percentunit", desc="Python: rate(process_cpu_seconds_total); JVM: process_cpu_usage."))
-health = dashboard("aiops-service-health", "AIOps Service Health", P, "30s", ["aiops", "health"],
+health = dashboard("aiops-service-health", "AIOps Service Health", P, "30s", ["aiops", "health", "req-034"],
                    time_from="now-1h", links=nav_links(),
-                   desc="Golden signals for ingestion, forecasting and diagnostic services.")
+                   desc="REQ-034: real-time throughput and error rates for ingestion, forecasting and "
+                        "diagnostic services.")
 
 # ════════════════════════════ slo ════════════════════════════
 _id[0] = 0
@@ -395,7 +300,7 @@ P.append(table("SLO burn alerts firing", 0, 28, 24, 6,
 slo = dashboard("aiops-slo", "AIOps SLOs & Error Budgets", P, "1m", ["aiops", "slo"], time_from="now-24h",
                 links=nav_links(), desc="SLO compliance, error budget and burn rates.")
 
-for name, d in (("aiops-overview", overview), ("service-health", health), ("slo", slo)):
+for name, d in (("service-health", health), ("slo", slo)):
     with open(f"{OUT}/{name}.json", "w") as f:
         json.dump(d, f, indent=2, ensure_ascii=False)
         f.write("\n")

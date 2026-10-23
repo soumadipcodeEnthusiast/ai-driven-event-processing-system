@@ -29,7 +29,7 @@ tests:
               summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (fast burn)"
               description: "SLO ingestion-availability (objective 99.9%) error ratio is 4.762% — fast burn. See Grafana SLO dashboard."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
-              dashboard: "http://localhost:3000/d/aiops-slo"
+              dashboard: "http://localhost:9030/d/aiops-slo"
           - exp_labels:
               severity: warning
               service: ingestion-service
@@ -38,7 +38,7 @@ tests:
               summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (slow burn)"
               description: "SLO ingestion-availability (objective 99.9%) error ratio is 4.762% — slow burn. See Grafana SLO dashboard."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
-              dashboard: "http://localhost:3000/d/aiops-slo"
+              dashboard: "http://localhost:9030/d/aiops-slo"
 
   # Healthy: 0.05% errors (0.5x burn) -> no alert.
   - interval: 1m
@@ -72,16 +72,16 @@ tests:
               service: forecasting-service
               slo: forecast-latency
             exp_annotations:
-              summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (fast burn)"
+              summary: "Forecast latency SLO (< 2 s, REQ-021) is burning budget (fast burn)"
               description: "SLO forecast-latency (objective 99%) error ratio is 20% — fast burn. See Grafana SLO dashboard."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
-              dashboard: "http://localhost:3000/d/aiops-slo"
+              dashboard: "http://localhost:9030/d/aiops-slo"
           - exp_labels:
               severity: warning
               service: forecasting-service
               slo: forecast-latency
             exp_annotations:
-              summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (slow burn)"
+              summary: "Forecast latency SLO (< 2 s, REQ-021) is burning budget (slow burn)"
               description: "SLO forecast-latency (objective 99%) error ratio is 20% — slow burn. See Grafana SLO dashboard."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
-              dashboard: "http://localhost:3000/d/aiops-slo"
+              dashboard: "http://localhost:9030/d/aiops-slo"

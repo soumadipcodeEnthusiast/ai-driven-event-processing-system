@@ -29,28 +29,30 @@ groups:
       - record: component_outcome:forecast_runs:rate5m
         expr: sum by (component, outcome) (rate(forecast_runs_total[5m]))
 
+  # Anomaly detection (REQ-016 to REQ-020, docs/adr/0008). diagnostic-service's
+  # earlier GraphRAG/LLM/playbook recording rules (diagnosis_latency_seconds,
+  # graph_context_seconds, llm_request_seconds, llm_failures_total,
+  # diagnoses_total) are retired along with that design.
   - name: aiops-diagnostic-recording
     rules:
-      - record: service:diagnosis_latency_seconds:p95_5m
-        expr: histogram_quantile(0.95, sum by (le) (rate(diagnosis_latency_seconds_bucket[5m])))
+      - record: service:anomaly_scoring_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(anomaly_scoring_latency_seconds_bucket[5m])))
         labels: {service: diagnostic-service}
-      - record: service:graph_context_seconds:p95_5m
-        expr: histogram_quantile(0.95, sum by (le) (rate(graph_context_seconds_bucket[5m])))
+      - record: service:anomalies_detected:rate5m
+        expr: sum(rate(anomalies_detected_total[5m]))
         labels: {service: diagnostic-service}
-      - record: provider:llm_request_seconds:p95_5m
-        expr: histogram_quantile(0.95, sum by (provider, le) (rate(llm_request_seconds_bucket[5m])))
-      # Share of diagnoses that fell back to the rule-based playbook (LLM degraded/unset).
-      - record: service:diagnoses_fallback:ratio_rate30m
-        expr: |
-          sum(increase(diagnoses_total{outcome="fallback"}[30m]))
-          /
-          sum(increase(diagnoses_total[30m]))
+      - record: service:anomaly_audit_publish_failures:increase30m
+        expr: sum(increase(anomaly_audit_publish_failures_total[30m]))
         labels: {service: diagnostic-service}
-      # Non-zero only when an LLM is actually configured and being called
-      # (LLM_PROVIDER=none produces neither series).
-      - record: service:llm_calls:increase30m
-        expr: |
-          (sum(increase(llm_request_seconds_count[30m])) or vector(0))
-          +
-          (sum(increase(llm_failures_total[30m])) or vector(0))
+      - record: service:anomaly_events_scored:rate5m
+        expr: sum(rate(anomaly_events_scored_total[5m]))
         labels: {service: diagnostic-service}
+
+  # S3 archival (REQ-028).
+  - name: aiops-archive-recording
+    rules:
+      - record: topic:archive_records:rate5m
+        expr: sum by (topic) (rate(archive_records_total[5m]))
+      - record: service:archive_failures:increase15m
+        expr: sum(increase(archive_failures_total[15m]))
+        labels: {service: event-archiver}

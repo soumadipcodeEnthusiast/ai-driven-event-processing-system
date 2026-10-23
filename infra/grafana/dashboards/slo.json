@@ -46,12 +46,6 @@
   },
   "links": [
     {
-      "title": "AIOps Overview",
-      "type": "link",
-      "url": "/d/aiops-overview",
-      "icon": "dashboard"
-    },
-    {
       "title": "Service Health",
       "type": "link",
       "url": "/d/aiops-service-health",

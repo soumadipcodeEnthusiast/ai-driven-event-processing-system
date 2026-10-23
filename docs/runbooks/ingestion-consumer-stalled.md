@@ -6,7 +6,7 @@
 | **Severity** | critical |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 The consumer has lag but processed zero events for 5 minutes.
 
@@ -30,7 +30,7 @@ docker exec kafka kafka-consumer-groups --bootstrap-server localhost:9092 \
   --describe --group ingestion-consumer-group     # any members? CONSUMER-ID empty = no consumer
 docker compose -f infra/docker-compose.yml logs --tail=300 ingestion-service
 # thread dump (stuck listener?)
-curl -s localhost:8080/actuator/threaddump | jq '.threads[] | select(.threadName|test("kafka|listener"))'
+curl -s localhost:9080/actuator/threaddump | jq '.threads[] | select(.threadName|test("kafka|listener"))'
 ```
 Likely causes: a poison message that is retried forever, listener thread blocked on a send to
 `normalized-events` / `raw-events.DLT`, lost broker connection.
@@ -47,5 +47,5 @@ Likely causes: a poison message that is retried forever, listener thread blocked
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

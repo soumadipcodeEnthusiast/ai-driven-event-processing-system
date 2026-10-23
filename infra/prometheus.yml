@@ -77,7 +77,20 @@ scrape_configs:
       - target_label: service
         replacement: diagnostic-service
 
-  # Grafana — serves the REQ-K dashboard; /metrics is enabled by default.
+  # event-archiver — Kafka → S3 archival (REQ-028), prometheus_client /metrics
+  - job_name: event-archiver
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - event-archiver:8083
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: service
+        replacement: event-archiver
+
+  # Grafana — serves the REQ-034 dashboard; /metrics is enabled by default.
   - job_name: grafana
     metrics_path: /metrics
     scrape_interval: 30s

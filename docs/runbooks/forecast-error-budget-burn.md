@@ -6,7 +6,7 @@
 | **Severity** | critical / warning |
 | **Service** | forecasting-service |
 | **Rule file** | `infra/prometheus/rules/slo-burn-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 Forecast runs (`forecast_runs_total{outcome="error"}`) are failing fast enough to exhaust the 99 % budget.
 
@@ -16,7 +16,7 @@ Forecast runs (`forecast_runs_total{outcome="error"}`) are failing fast enough t
 
 ## Impact
 
-Components without successful forecasts get **no predictive alerts** (REQ-E) — silent risk.
+Components without successful forecasts get **no predictive alerts** (REQ-025) — silent risk.
 
 ## Diagnosis
 
@@ -27,7 +27,7 @@ max by (forecaster, model_version) (forecaster_info)
 ```
 ```bash
 docker compose -f infra/docker-compose.yml logs --since=15m forecasting-service | grep -iE "error|exception|timeout"
-curl -s localhost:8081/ready
+curl -s localhost:9081/ready
 curl -s 'localhost:9090/api/v1/query?query=up'   # Prometheus reachable & answering?
 ```
 Typical causes: Prometheus unreachable/slow (`PROMETHEUS_URL`), a component in `components.yaml`
@@ -43,5 +43,5 @@ whose metric query returns no data, broken TFT model artefact after a model vers
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

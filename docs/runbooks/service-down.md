@@ -6,7 +6,7 @@
 | **Severity** | critical |
 | **Service** | any application service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 Prometheus cannot scrape ingestion-, forecasting- or diagnostic-service for > 1 min.
 
@@ -17,8 +17,8 @@ Prometheus cannot scrape ingestion-, forecasting- or diagnostic-service for > 1 
 ## Impact
 
 - **ingestion-service**: no events are normalised; Kafka lag grows; downstream forecasts run on stale data.
-- **forecasting-service**: no PredictiveAlerts are emitted (REQ-E) and the REQ-K live feed is empty.
-- **diagnostic-service**: alerts get no playbook (`playbook_id = null`), REQ-H/REQ-I violated.
+- **forecasting-service**: no PredictiveAlerts are emitted (REQ-025) and `GET /alerts` is unavailable.
+- **diagnostic-service**: no anomaly scoring (REQ-016 to REQ-020) — though as of this writing it is stubbed regardless of service health.
 
 ## Diagnosis
 
@@ -29,9 +29,9 @@ changes(process_start_time_seconds[30m])          # restart loop?
 ```bash
 docker compose -f infra/docker-compose.yml ps
 docker compose -f infra/docker-compose.yml logs --tail=200 <service>
-curl -fsS localhost:8080/actuator/health   # ingestion
-curl -fsS localhost:8081/health            # forecasting
-curl -fsS localhost:8082/health            # diagnostic
+curl -fsS localhost:9080/actuator/health   # ingestion
+curl -fsS localhost:9081/health            # forecasting
+curl -fsS localhost:9082/health            # diagnostic
 # Kubernetes
 kubectl -n event-processor get pods -l app.kubernetes.io/name=<service>
 kubectl -n event-processor describe pod <pod>          # OOMKilled? CrashLoopBackOff? failing probes?
@@ -52,5 +52,5 @@ http://localhost:9090/targets.
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

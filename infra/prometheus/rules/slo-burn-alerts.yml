@@ -26,7 +26,7 @@ groups:
           summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (fast burn)"
           description: "SLO ingestion-availability (objective 99.9%) error ratio is {{ $value | humanizePercentage }} — fast burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: IngestionErrorBudgetBurn
         expr: |
           (
@@ -49,7 +49,7 @@ groups:
           summary: "Ingestion is burning its availability error budget (events ending in outcome=error) (slow burn)"
           description: "SLO ingestion-availability (objective 99.9%) error ratio is {{ $value | humanizePercentage }} — slow burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-error-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: IngestionLatencyBudgetBurn
         expr: |
           (
@@ -69,10 +69,10 @@ groups:
           service: ingestion-service
           slo: ingestion-latency
         annotations:
-          summary: "Ingestion processing latency SLO (< 500 ms, REQ-A) is burning budget (fast burn)"
+          summary: "Ingestion processing latency SLO (< 500 ms, REQ-004) is burning budget (fast burn)"
           description: "SLO ingestion-latency (objective 99%) error ratio is {{ $value | humanizePercentage }} — fast burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-latency-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: IngestionLatencyBudgetBurn
         expr: |
           (
@@ -92,10 +92,10 @@ groups:
           service: ingestion-service
           slo: ingestion-latency
         annotations:
-          summary: "Ingestion processing latency SLO (< 500 ms, REQ-A) is burning budget (slow burn)"
+          summary: "Ingestion processing latency SLO (< 500 ms, REQ-004) is burning budget (slow burn)"
           description: "SLO ingestion-latency (objective 99%) error ratio is {{ $value | humanizePercentage }} — slow burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-latency-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: ForecastErrorBudgetBurn
         expr: |
           (
@@ -118,7 +118,7 @@ groups:
           summary: "Forecast runs are failing fast enough to exhaust the error budget (fast burn)"
           description: "SLO forecast-availability (objective 99%) error ratio is {{ $value | humanizePercentage }} — fast burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-error-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: ForecastErrorBudgetBurn
         expr: |
           (
@@ -141,7 +141,7 @@ groups:
           summary: "Forecast runs are failing fast enough to exhaust the error budget (slow burn)"
           description: "SLO forecast-availability (objective 99%) error ratio is {{ $value | humanizePercentage }} — slow burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-error-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: ForecastLatencyBudgetBurn
         expr: |
           (
@@ -161,10 +161,10 @@ groups:
           service: forecasting-service
           slo: forecast-latency
         annotations:
-          summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (fast burn)"
+          summary: "Forecast latency SLO (< 2 s, REQ-021) is burning budget (fast burn)"
           description: "SLO forecast-latency (objective 99%) error ratio is {{ $value | humanizePercentage }} — fast burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
       - alert: ForecastLatencyBudgetBurn
         expr: |
           (
@@ -184,7 +184,7 @@ groups:
           service: forecasting-service
           slo: forecast-latency
         annotations:
-          summary: "Forecast latency SLO (< 2 s, REQ-D) is burning budget (slow burn)"
+          summary: "Forecast latency SLO (< 2 s, REQ-021) is burning budget (slow burn)"
           description: "SLO forecast-latency (objective 99%) error ratio is {{ $value | humanizePercentage }} — slow burn. See Grafana SLO dashboard."
           runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/forecast-latency-budget-burn.md"
-          dashboard: "http://localhost:3000/d/aiops-slo"
+          dashboard: "http://localhost:9030/d/aiops-slo"
