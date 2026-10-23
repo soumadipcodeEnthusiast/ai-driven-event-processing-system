@@ -89,10 +89,10 @@ def settings(components_file: Path) -> Settings:
     return Settings(
         prometheus_url=PROM,
         diagnostic_url=DIAG,
+        diagnostic_backoff_seconds=0,
         components_config=str(components_file),
         forecaster="statistical",
         forecast_interval_seconds=0,
-        diagnostic_backoff_seconds=0,
         alert_min_lead_minutes=10,
     )
 
