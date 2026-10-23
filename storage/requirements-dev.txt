@@ -1,0 +1,5 @@
+# ─── storage/requirements-dev.txt — tests, lint, types ───────────────────────
+-r requirements.txt
+pytest==8.2.*
+ruff==0.5.*
+mypy==1.10.*

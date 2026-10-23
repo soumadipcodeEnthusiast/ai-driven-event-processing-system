@@ -1,0 +1,4 @@
+# ─── storage/requirements.txt — S3 archival client + archiver (REQ-028) ──────
+boto3==1.34.*
+confluent-kafka==2.4.*
+prometheus-client==0.20.*
