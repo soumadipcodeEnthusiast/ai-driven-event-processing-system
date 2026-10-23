@@ -1,0 +1,274 @@
+Issue Id,Parent Id,Issue Type,Summary,Description,Priority,Labels,Component,Status,Story Points
+E1,,Epic,Event ingestion & stream preprocessing,"Kafka consumer that validates, normalises and routes raw events (SRS §4.1, §4.2).",High,srs-v1,ingestion-service,Done,
+E2,,Epic,Anomaly detection,"Score every event, alert above a runtime threshold, audit anomalies (SRS §4.4).",High,srs-v1,diagnostic-service,In Progress,
+E3,,Epic,Predictive analytics,"Forecast platform metrics, alert ahead of breaches, versioned predictions (SRS §4.5).",High,srs-v1,forecasting-service,Done,
+E4,,Epic,Data persistence: S3 archival,Archive raw + normalized events to Amazon S3 with retention and atomic writes (SRS §4.6).,High,srs-v1,event-archiver,In Progress,
+E5,,Epic,Observability & dashboard,"Prometheus rules, Grafana dashboard, SLOs and runbooks (REQ-034).",High,srs-v1,observability,In Progress,
+E6,,Epic,Security: OAuth 2.0 & TLS,"API authentication and encryption in transit (REQ-046, REQ-047).",High,srs-v1,security,In Progress,
+E7,,Epic,"Infrastructure, CI/CD & testing","Terraform on AWS, Kubernetes, Jenkins pipeline, load testing (REQ-044, SRS §6).",High,srs-v1,devops,In Progress,
+S1,E1,Story,Consume raw-events concurrently and ack after send,"*Requirement:* REQ-001 / REQ-004
+
+*Acceptance criteria:*
+* Batch listener, MANUAL_IMMEDIATE ack only after output/DLT send is confirmed
+* Consumer lag < 500 ms (≈5 000 records) at 10 000 events/s
+
+*Verified by:* EventConsumerIT (embedded Kafka); JMeter load test (loadtest/); IngestionConsumerLagHigh alert",High,req-001,ingestion-service,Done,5
+S2,E1,Story,Reject malformed events to the DLT,"*Requirement:* REQ-005
+
+*Acceptance criteria:*
+* Invalid events go to raw-events.DLT with original bytes
+* x-error-reason and x-original-* headers
+* Structured WARN log with partition/offset
+
+*Verified by:* NormalizationServiceTest (57 cases), EventConsumerIT",High,req-005,ingestion-service,Done,3
+S3,E1,Story,Normalise events to NormalizedEvent,"*Requirement:* REQ-008
+
+*Acceptance criteria:*
+* UTC timestamp, defaults for type/component_id/payload
+* schema_version 1.0 and ingested_at
+* Output validates against contracts/normalized-event.schema.json
+
+*Verified by:* NormalizationServiceTest",High,req-008,ingestion-service,Done,3
+S4,E1,Story,"At-least-once, idempotent delivery","*Requirement:* REQ-040
+
+*Acceptance criteria:*
+* No data loss on redelivery
+* Retries 3x with back-off, then DLT
+
+*Verified by:* EventConsumerIT",High,req-040,ingestion-service,Done,3
+S5,E2,Story,Compute an anomaly score for every processed event,"*Requirement:* REQ-016
+
+*Acceptance criteria:*
+* Score in [0,1], higher = more anomalous (ewma-zscore model)
+* Every event on normalized-events is scored (consumer group diagnostic-anomaly-scorer)
+* POST /score/{event_id} for on-demand scoring
+
+*Verified by:* test_anomaly_detection.py; e2e: anomaly_events_scored_total == valid ingested events",High,req-016,diagnostic-service,Done,5
+S6,E2,Story,Trigger an alert when the score exceeds the threshold,"*Requirement:* REQ-017
+
+*Acceptance criteria:*
+* Strict > comparison
+* Anomaly logged as event=anomaly_detected
+
+*Verified by:* Boundary tests; API spike test",High,req-017,diagnostic-service,Done,3
+S7,E2,Story,Swap the scoring model without downtime,"*Requirement:* REQ-018
+
+*Acceptance criteria:*
+* PUT /model swaps atomically; in-flight calls finish on the old model
+* Optional warm start keeps baselines
+
+*Verified by:* Model swap tests",High,req-018,diagnostic-service,Done,3
+S8,E2,Story,Record anomalies to the anomaly-audit Kafka topic,"*Requirement:* REQ-019
+
+*Acceptance criteria:*
+* Idempotent acks=all producer, keyed by event_id
+* Records validate against contracts/anomaly-audit.schema.json
+* Publish failures never block scoring; counted + alerted
+
+*Verified by:* Schema-validated tests + real confluent-kafka client test; e2e: records on anomaly-audit",High,req-019,diagnostic-service,Done,3
+S9,E2,Story,Adjust the detection threshold at runtime,"*Requirement:* REQ-020
+
+*Acceptance criteria:*
+* PUT /thresholds validates [0,1], 422 otherwise
+* Change history kept (REQ-053)
+
+*Verified by:* Threshold API tests",High,req-020,diagnostic-service,Done,2
+S10,E3,Story,Time-series forecasting from historical data,"*Requirement:* REQ-021
+
+*Acceptance criteria:*
+* Statistical damped-Holt default; trained ar-ridge model when mounted
+* Forecast latency < 2 s per 60-min window
+
+*Verified by:* test_unit.py, test_predictive_analytics.py; forecast-latency SLO",High,req-021,forecasting-service,Done,5
+S11,E3,Story,Refresh predictions at a configurable interval,"*Requirement:* REQ-022
+
+*Acceptance criteria:*
+* FORECAST_INTERVAL_SECONDS background loop
+
+*Verified by:* test_api.py",High,req-022,forecasting-service,Done,1
+S12,E3,Story,Query API for predictions,"*Requirement:* REQ-023
+
+*Acceptance criteria:*
+* GET /predictions returns latest per component/metric
+
+*Verified by:* API tests",High,req-023,forecasting-service,Done,2
+S13,E3,Story,Version and store prediction outputs,"*Requirement:* REQ-024
+
+*Acceptance criteria:*
+* Each prediction tagged with model_version
+* Append-only JSONL (PREDICTIONS_PATH)
+* GET /predictions/history
+
+*Verified by:* PredictionStore tests",High,req-024,forecasting-service,Done,3
+S14,E3,Story,Flag low-confidence predictions and alert ahead of breach,"*Requirement:* REQ-025
+
+*Acceptance criteria:*
+* confidence = 1/(1+relative p90 half-width)
+* low_confidence below PREDICTION_MIN_CONFIDENCE
+* PredictiveAlert ≥ 10 min before predicted breach
+
+*Verified by:* Confidence + alert lifecycle tests",High,req-025,forecasting-service,Done,3
+S15,E3,Task,Training job for the ML forecaster,"*Requirement:* REQ-021
+
+*Acceptance criteria:*
+* Train from Prometheus or CSV with scikit-learn
+* Backtest vs statistical baseline; --require-better gate
+* JSON model (no pickle)
+
+*Verified by:* test_training_cli_from_csv",High,req-021,forecasting-service,Done,3
+S16,E3,Story,Runtime-configurable forecasting thresholds,"*Requirement:* REQ-052
+
+*Acceptance criteria:*
+* PUT /thresholds/{component}
+* components.yaml hot reload
+
+*Verified by:* test_api.py",High,req-052,forecasting-service,Done,2
+S17,E4,Story,Archive raw and normalized events to S3,"*Requirement:* REQ-028
+
+*Acceptance criteria:*
+* event-archiver consumes raw-events + normalized-events
+* Gzipped NDJSON per (topic, partition) batch, Hive-style dt=/hour= keys
+* Offsets committed only after upload; rewind on failure
+
+*Verified by:* storage/tests; e2e against MinIO (objects under events/<topic>/…)",High,req-028,event-archiver,Done,5
+S18,E4,Story,Retention policy for archived events,"*Requirement:* REQ-029
+
+*Acceptance criteria:*
+* Lifecycle: Glacier IR after 30 d, expire after 365 d (Terraform)
+* MinIO expiry rule locally
+
+*Verified by:* terraform validate; mc ilm rule ls",High,req-029,event-archiver,Done,2
+S19,E4,Story,"Atomic, duplicate-free archive writes","*Requirement:* REQ-030
+
+*Acceptance criteria:*
+* One PutObject per batch
+* Deterministic keys so replays overwrite
+
+*Verified by:* test_failed_upload_rewinds_without_commit",High,req-030,event-archiver,Done,2
+S20,E4,Task,Attach the production S3 bucket,"*Requirement:* REQ-028
+
+*Acceptance criteria:*
+* Bucket created/attached in AWS (or via terraform create_archive_bucket)
+* Archiver IRSA role + ServiceAccount annotation
+* docker-compose.aws.yml for laptop runs
+
+*Verified by:* Owner: AWS account holder",Highest,req-028,event-archiver,In Progress,2
+S21,E5,Story,Real-time Grafana dashboard,"*Requirement:* REQ-034
+
+*Acceptance criteria:*
+* Ingestion throughput/latency/lag/DLT
+* Forecasting, anomaly detection, archival rows
+
+*Verified by:* Service Health dashboard",High,req-034,observability,Done,3
+S22,E5,Task,Alert rules + runbooks for every alert,"*Requirement:* REQ-034
+
+*Acceptance criteria:*
+* promtool unit tests pass
+* Runbook per alert incl. EventArchiveUploadFailing/Stalled
+
+*Verified by:* make prom-test",High,req-034,observability,Done,3
+S23,E5,Task,SLOs for anomaly detection and archival,"*Requirement:* SLO
+
+*Acceptance criteria:*
+* Objectives set from real traffic, burn-rate alerts
+
+*Verified by:* docs/SLO.md",Medium,,observability,To Do,3
+S24,E6,Story,OAuth 2.0 bearer tokens on all APIs,"*Requirement:* REQ-046
+
+*Acceptance criteria:*
+* Spring resource server with JWKS/issuer + audience validation
+* FastAPI services validate JWT (iss, aud, exp) when OAUTH2_ENABLED
+* Missing/expired/forged tokens → 401
+
+*Verified by:* SecurityConfigTest, test_oauth2_* tests",High,req-046,security,Done,5
+S25,E6,Story,TLS 1.2+ in transit,"*Requirement:* REQ-047
+
+*Acceptance criteria:*
+* ALB Ingress TLS 1.2/1.3 policy
+* server.ssl via SSL_ENABLED
+* S3 bucket denies non-TLS
+
+*Verified by:* Config review; needs ACM certificate",High,req-047,security,Done,2
+S26,E6,Task,mTLS between services and secret rotation,"*Requirement:* Phase 5
+
+*Acceptance criteria:*
+* Service mesh or mTLS
+* Rotate credentials
+* Grafana SSO
+
+*Verified by:* —",Medium,,security,To Do,8
+S27,E7,Story,"Terraform: EKS, S3 archive bucket, IRSA, ECR","*Requirement:* REQ-044
+
+*Acceptance criteria:*
+* terraform validate passes without credentials
+* Bring-your-own bucket supported
+
+*Verified by:* make tf-validate",High,req-044,devops,Done,5
+S28,E7,Story,Jenkins CI/CD pipeline,"*Requirement:* SRS §6
+
+*Acceptance criteria:*
+* Build, test, lint, promtool, terraform validate, Docker build
+* Push to ECR on main
+* Runs locally via ci/jenkins/run-local.sh
+
+*Verified by:* Local Jenkins run",High,,devops,Done,5
+S29,E7,Task,JMeter load test for ingestion throughput and ack latency,"*Requirement:* REQ-001 / REQ-004
+
+*Acceptance criteria:*
+* Kafka producer load at configurable rate (target 10k events/s)
+* API load on /score and /predictions
+* PASS/FAIL report vs REQ-001/004 from Prometheus metrics
+
+*Verified by:* loadtest/run-load-test.sh",High,req-001,devops,Done,5
+S30,E7,Task,Scale ingestion on consumer lag (KEDA) and raise partitions,"*Requirement:* Phase 5
+
+*Acceptance criteria:*
+* Lag-based autoscaling
+* Partitions ≥ pods × concurrency
+
+*Verified by:* Load test",Medium,,devops,To Do,5
+S31,E7,Task,Durable alert store; lift forecasting single-replica limit,"*Requirement:* ADR-0007
+
+*Acceptance criteria:*
+* Shared store (Postgres or compacted topic)
+* Leader election for the loop
+
+*Verified by:* —",Medium,,devops,To Do,8
+S32,E7,Task,"Chaos tests: broker loss, Prometheus outage, S3 outage","*Requirement:* Phase 5
+
+*Acceptance criteria:*
+* Documented degradation verified
+
+*Verified by:* —",Low,,devops,To Do,5
+S33,E2,Bug,Audit publish failed: produce() got on_delivery as the partition argument,confluent_kafka.Producer.produce's 4th positional parameter is `partition`; passing the callback positionally failed every audit publish (26/26 in e2e). Fixed with keyword args; regression test uses the real client.,High,found-in-e2e,diagnostic-service,Done,
+S34,E7,Bug,MinIO images removed from Docker Hub/Quay break `make up`,"minio/minio and minio/mc no longer pull ('repository does not exist'). Switched compose to bitnamilegacy/minio (same server, ships mc).",High,found-in-e2e,devops,Done,
+S35,E5,Bug,`make prom-test` glob never expanded inside the container,promtool received the literal 'prometheus/rules/*.yml'. Now runs via sh -c inside the container.,High,found-in-e2e,observability,Done,
+S36,E3,Bug,Compose set MODEL_VERSION instead of ML_MODEL_VERSION for forecasting-service,The forecaster version override never reached the service. Compose now sets ML_MODEL_PATH / ML_MODEL_VERSION.,High,found-in-e2e,forecasting-service,Done,
+S37,E7,Task,REQ-004: broker ack p95 above 50 ms on the single-broker local stack,"JMeter at 2 000 events/s (acks=all, batch 100, 8 threads) on Docker Desktop: ack p50 27 ms, *p95 407 ms*, p99 2.1 s; throughput 1 454 events/s because producer threads wait on slow tail acks. Lag stayed < 2 000 records and all 87 000 events were ingested, scored and archived.
+
+*Next:* re-run on the EKS deployment (3 brokers, RF=3) — loadtest/run-load-test.sh --rate 10000 — and tune linger/batch.size if needed.",High,load-test,devops,To Do,5
+S38,E2,Task,Run diagnostic Kafka consumer and API in separate processes,"Under 1.4k events/s from normalized-events, POST /score p95 is 138 ms but *p99 1.36 s* (14/545 calls > 500 ms): the consumer thread and the API share one Python process (GIL). Split into a consumer Deployment and an API Deployment, or run the consumer with multiprocessing.",Medium,load-test,diagnostic-service,To Do,3
+S39,E7,Bug,JMeter fails on JDK 26 (Groovy 'Unsupported class file major version 70'),JMeter 5.6.3's launcher on macOS picks the newest JDK. run-load-test.sh now pins JDK 21/17 when JAVA_HOME is unset.,Medium,found-in-e2e,devops,Done,
+S40,E2,Bug,anomaly_audit_published_total lags when anomalies are rare,"confluent-kafka only runs delivery callbacks inside poll(); AuditPublisher polled only on the next publish, so with rare anomalies the published/failed counters (and AnomalyAuditPublishFailing) lagged until the next anomaly. Records themselves were delivered. Fixed with a background poller thread; covered by test_audit_delivery_callbacks_served_in_background.",Medium,found-in-e2e,diagnostic-service,Done,
+E8,,Epic,GraphRAG root-cause analysis,Explain every anomaly and predictive alert: 2-hop dependency context from Neo4j + local LLM (Ollama) → ranked incident playbook (docs/adr/0010).,High,graphrag,diagnostic-service,In Progress,
+E9,,Epic,Temporal Fusion Transformer forecaster,Forecast platform metrics 60 min ahead with a TFT trained on the platform's own Prometheus history; Holt as fallback (docs/adr/0010).,High,tft,forecasting-service,Done,
+S41,E8,Story,Neo4j dependency graph seeded from the service catalogue,"15 components (producers, Kafka/ZooKeeper, pipeline services, S3, Neo4j, Ollama, Prometheus, Grafana) and their calls/depends_on/publishes_to/consumes_from edges; diagnostic-service seeds an empty database and falls back to the in-memory seed if Neo4j is down.",High,graphrag,diagnostic-service,Done,3
+S42,E8,Story,Anomalies trigger GraphRAG automatically,"IncidentTrigger batches anomalies per component (5 s), one diagnosis per component per cooldown (600 s), single worker so the local LLM is never overloaded. Playbooks published to the incident-playbooks topic.",High,graphrag,diagnostic-service,Done,5
+S43,E8,Story,Predictive alerts get a GraphRAG playbook,forecasting-service posts each new alert to POST /diagnose in the background and stores playbook_id on the alert (ADR-0001 client restored).,Medium,graphrag,forecasting-service,Done,3
+S44,E8,Task,Run Ollama (llama3.2:3b) in docker compose,"ollama + one-shot ollama-pull in compose; LLM_PROVIDER=ollama by default, rule-based fallback on timeout or malformed output.",Medium,graphrag,devops,Done,2
+S45,E8,Bug,Local LLM is OOM-killed while the TFT trains,On a 7.7 GB Docker VM the TFT training job (~3 GB) plus the stack leaves no room for llama-server; Ollama logs 'signal: killed' and diagnoses fall back to rules. Don't train during a demo; raise Docker Desktop memory to 10 GB+ or use a 1B model.,Medium,found-in-e2e,diagnostic-service,To Do,2
+S46,E8,Story,Write live health back into Neo4j,Seed health_status is static. Update node health from the console/Prometheus probes so GraphRAG ranks genuinely degraded dependencies first.,Medium,graphrag,diagnostic-service,To Do,5
+S47,E8,Task,Kubernetes manifests for Neo4j and Ollama,Compose runs both; infra/k8s has no StatefulSet for Neo4j or Deployment for Ollama yet (EKS GPU/CPU node sizing to decide).,Medium,graphrag,devops,To Do,5
+S48,E9,Story,Train the TFT on local Prometheus history,"training/train_tft.py: NaN cleaning, splits series at scrape gaps > 5 steps, capped batches per epoch so make train-tft finishes in ~15 min on CPU; checkpoint + JSON sidecar with model_version.",High,tft,forecasting-service,Done,5
+S49,E9,Story,Serve the TFT with a direct forward pass,"TFTForecaster runs one batch through the network instead of model.predict (which builds a Lightning Trainer per call); FORECASTER=auto picks TFT, then ar-ridge, then Holt; Holt covers any failed prediction.",High,tft,forecasting-service,Done,3
+S50,E7,Story,Demo console dashboard (port 9099),"Live event flow with Kafka offsets, topic throughput chart, consumer lag, container health, GraphRAG playbooks, TFT status and a 7-step guided demo. Docker blue / Kafka charcoal theme, light and dark.",Medium,demo,console,Done,5
+E10,,Epic,Testing & quality gates,"All automated test suites, CI pipeline and load test, with their latest results. Filter by label 'testing'.",High,testing,qa,Done,
+T1,E10,Task,"Unit + integration tests: ingestion-service (JUnit, embedded Kafka)","Result 2026-10-22: 63 passed, 0 failed (Jenkins build #8, JUnit report). Covers schema validation, normalisation, DLT routing, OAuth2 security config.",High,testing,ingestion-service,Done,3
+T2,E10,Task,Unit + API tests: diagnostic-service (pytest),"Result 2026-10-22: 74 passed. Anomaly scorer, thresholds, audit publisher, Kafka consumer, OAuth2, GraphRAG graph traversal (Neo4j fallback), LLM client retries, playbook parsing, incident trigger. Plus ruff + mypy clean.",High,"testing,graphrag",diagnostic-service,Done,3
+T3,E10,Task,Unit + API tests: forecasting-service (pytest),"Result 2026-10-22: 58 passed. Holt / ar-ridge / TFT selection, alert lead-time gate, prediction store, thresholds hot reload, alert → GraphRAG hand-off retries. Plus ruff + mypy clean.",High,"testing,tft",forecasting-service,Done,3
+T4,E10,Task,Unit tests: event-archiver (pytest),"Result 2026-10-22: 10 passed. Batching, deterministic S3 keys, commit-after-upload, rewind on failure.",Medium,testing,storage,Done,2
+T5,E10,Task,Prometheus alert and recording rules (promtool),"Result 2026-10-22: 81 rules valid, alert unit tests SUCCESS.",Medium,testing,monitoring,Done,1
+T6,E10,Task,"Infrastructure validation (terraform validate, kubeconform)",Result: terraform validate SUCCESS (Jenkins build #8); kubeconform 24/24 manifests valid against Kubernetes 1.29.,Medium,testing,devops,Done,1
+T7,E10,Task,Jenkins CI pipeline run,Build #8 SUCCESS in 15 min: Build (Maven + 3 x pip) → Test (all suites above) → Docker Build (5 images). Push to ECR skipped (main branch + AWS credentials only).,High,"testing,ci",devops,Done,2
+T8,E10,Task,"JMeter load test: 1,000 events/s for 60 s","Result 2026-10-22 (run 20261022T084747Z): 10/11 PASS. 961 events/s; 57,600/57,600 ingested, scored and archived; 125/125 anomalies audited; API p95 11–29 ms. FAIL: REQ-004 broker ack p95 64 ms > 50 ms (single local broker) — see S38/S39.",High,"testing,load-test",qa,Done,3
+T9,E10,Bug,REQ-004 broker ack p95 above 50 ms on a single local broker,JMeter: p95 64 ms (earlier run 171 ms) with acks=all on one broker in Docker Desktop. Expected to pass on the 3-broker cluster; re-test on EKS.,Medium,"testing,load-test",kafka,To Do,2
