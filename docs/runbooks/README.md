@@ -4,9 +4,14 @@ One runbook per Prometheus alert in `infra/prometheus/rules/`. Each alert's `run
 
 Commands assume the repo root as working directory and the local stack (`docker compose -f infra/docker-compose.yml`); Kubernetes equivalents use namespace `event-processor`.
 
+`DiagnosticFallbackRatioHigh`, `LLMRequestFailures`, `DiagnosisErrorRateHigh`,
+`DiagnosisLatencyHigh` and `GraphContextLatencyHigh` are retired along with
+the GraphRAG/LLM/playbook design (docs/adr/0008); `AnomalyAuditPublishFailing`
+replaces them for the rescoped anomaly-detection feature.
+
 | Alert | Severity | Service | Runbook |
 |---|---|---|---|
-| `ServiceDown` | critical | any application service | [service-down.md](service-down.md) |
+| `ServiceDown` | critical | any application service (incl. event-archiver) | [service-down.md](service-down.md) |
 | `GrafanaDown` | warning | grafana | [grafana-down.md](grafana-down.md) |
 | `IngestionInvalidRatioHigh` | warning | ingestion-service | [ingestion-invalid-ratio-high.md](ingestion-invalid-ratio-high.md) |
 | `IngestionErrorBudgetBurn` | critical / warning | ingestion-service | [ingestion-error-budget-burn.md](ingestion-error-budget-burn.md) |
@@ -18,11 +23,9 @@ Commands assume the repo root as working directory and the local stack (`docker 
 | `ForecastLatencyBudgetBurn` | critical / warning | forecasting-service | [forecast-latency-budget-burn.md](forecast-latency-budget-burn.md) |
 | `ForecastComponentFailing` | warning | forecasting-service | [forecast-component-failing.md](forecast-component-failing.md) |
 | `ForecastLoopStalled` | critical | forecasting-service | [forecast-loop-stalled.md](forecast-loop-stalled.md) |
-| `DiagnosticFallbackRatioHigh` | warning | diagnostic-service | [diagnostic-fallback-ratio-high.md](diagnostic-fallback-ratio-high.md) |
-| `LLMRequestFailures` | warning | diagnostic-service | [llm-request-failures.md](llm-request-failures.md) |
-| `DiagnosisErrorRateHigh` | critical | diagnostic-service | [diagnosis-error-rate-high.md](diagnosis-error-rate-high.md) |
-| `DiagnosisLatencyHigh` | warning | diagnostic-service | [diagnosis-latency-high.md](diagnosis-latency-high.md) |
-| `GraphContextLatencyHigh` | warning | diagnostic-service | [graph-context-latency-high.md](graph-context-latency-high.md) |
+| `AnomalyAuditPublishFailing` | warning | diagnostic-service | [anomaly-audit-publish-failing.md](anomaly-audit-publish-failing.md) |
+| `EventArchiveUploadFailing` | warning | event-archiver | [event-archive-failing.md](event-archive-failing.md) |
+| `EventArchiveStalled` | critical | event-archiver | [event-archive-failing.md](event-archive-failing.md) |
 | `PredictiveAlertCritical` | critical | forecasting-service | [predictive-alert-critical.md](predictive-alert-critical.md) |
 | `PredictiveAlertsUnacknowledged` | warning | forecasting-service | [predictive-alerts-unacknowledged.md](predictive-alerts-unacknowledged.md) |
 
@@ -35,15 +38,21 @@ Commands assume the repo root as working directory and the local stack (`docker 
 
 ## Ownership
 
+(These rows are informal repo-maintenance ownership, distinct from SRS v1.0
+§2.3's user classes. "SRE" isn't one of the SRS actors, though, so that row
+is retitled "DevOps Engineer" — the closest SRS fit for Prometheus/Grafana/
+SLO ownership.)
+
 | Service | Owner |
 |---|---|
 | ingestion-service, Kafka topics | Data Engineer |
-| forecasting-service, diagnostic-service, LLM | AI Engineer |
-| docker-compose, k8s, CI | DevOps |
-| Prometheus, Grafana, SLOs, runbooks | SRE |
+| forecasting-service, diagnostic-service | AI Engineer |
+| event-archiver, S3 archive bucket | Data Engineer |
+| docker-compose, k8s, Terraform, CI | DevOps |
+| Prometheus, Grafana, SLOs, runbooks | DevOps Engineer |
 
 ## Useful links
 
 - Prometheus alerts: http://localhost:9090/alerts · targets: http://localhost:9090/targets
-- Grafana: http://localhost:3000 (AIOps folder)
+- Grafana: http://localhost:9030 (AIOps folder)
 - Validate rules: `promtool check rules infra/prometheus/rules/*.yml && promtool test rules infra/prometheus/rules/tests/*.yml`

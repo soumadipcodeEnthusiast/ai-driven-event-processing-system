@@ -6,9 +6,9 @@
 | **Severity** | critical (> 5000 for 5m) / warning (> 1000 for 15m) |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
-The ingestion consumer is falling behind `raw-events`. At 10 000 ev/s, 5 000 records ≈ 500 ms (REQ-A).
+The ingestion consumer is falling behind `raw-events`. At 10 000 ev/s, 5 000 records ≈ 500 ms (REQ-001/REQ-004).
 
 ## Symptoms
 
@@ -16,7 +16,7 @@ The ingestion consumer is falling behind `raw-events`. At 10 000 ev/s, 5 000 rec
 
 ## Impact
 
-Normalised events — and therefore forecasts and predictive alerts — are delayed. REQ-A is violated while lag > 5 000.
+Normalised events — and therefore forecasts and predictive alerts — are delayed. REQ-001/REQ-004 is violated while lag > 5 000.
 
 ## Diagnosis
 
@@ -44,5 +44,5 @@ consumer is rebalancing repeatedly.
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

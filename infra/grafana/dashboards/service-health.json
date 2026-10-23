@@ -1,10 +1,11 @@
 {
   "uid": "aiops-service-health",
   "title": "AIOps Service Health",
-  "description": "Golden signals for ingestion, forecasting and diagnostic services.",
+  "description": "REQ-034: real-time throughput and error rates for ingestion, forecasting and diagnostic services.",
   "tags": [
     "aiops",
-    "health"
+    "health",
+    "req-034"
   ],
   "timezone": "utc",
   "editable": false,
@@ -45,12 +46,6 @@
     ]
   },
   "links": [
-    {
-      "title": "AIOps Overview",
-      "type": "link",
-      "url": "/d/aiops-overview",
-      "icon": "dashboard"
-    },
     {
       "title": "Service Health",
       "type": "link",
@@ -358,7 +353,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "Ingestion service (REQ-A / REQ-B)",
+      "title": "Ingestion service (REQ-001 / REQ-004 / REQ-005)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -515,7 +510,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Kafka consumer lag (records, max)",
-      "description": "kafka_consumer_fetch_manager_records_lag_max. REQ-A: 5000 records = 500 ms at 10k ev/s.",
+      "description": "kafka_consumer_fetch_manager_records_lag_max. REQ-001/REQ-004: 5000 records = 500 ms at 10k ev/s.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -599,7 +594,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Processing latency p95 / p99",
-      "description": "ingestion_processing_seconds histogram. REQ-A budget 500 ms.",
+      "description": "ingestion_processing_seconds histogram. REQ-004 budget 500 ms.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -901,7 +896,7 @@
     {
       "id": 11,
       "type": "row",
-      "title": "Forecasting service (REQ-D / REQ-E)",
+      "title": "Forecasting service / Predictive Analytics (REQ-021 / REQ-025)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -913,6 +908,138 @@
     },
     {
       "id": 12,
+      "type": "stat",
+      "title": "Open predictive alerts",
+      "description": "Gauge predictive_alerts_open from forecasting-service.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(predictive_alerts_open) or vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Forecaster",
+      "description": "forecaster_info: ML model or statistical fallback, and model version.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 22,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (forecaster, model_version) (forecaster_info)",
+          "legendFormat": "{{forecaster}} {{model_version}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "name",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 14,
       "type": "timeseries",
       "title": "Forecast runs by component / outcome",
       "description": "forecast_runs_total rate.",
@@ -921,7 +1048,7 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
+        "x": 8,
         "y": 22,
         "w": 8,
         "h": 8
@@ -979,16 +1106,16 @@
       }
     },
     {
-      "id": 13,
+      "id": 15,
       "type": "timeseries",
       "title": "Forecast latency p95",
-      "description": "forecast_latency_seconds. REQ-D: < 2 s for a 60-min window.",
+      "description": "forecast_latency_seconds. REQ-021: < 2 s for a 60-min window.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 8,
+        "x": 16,
         "y": 22,
         "w": 8,
         "h": 8
@@ -1059,7 +1186,7 @@
       }
     },
     {
-      "id": 14,
+      "id": 16,
       "type": "timeseries",
       "title": "Predictive alerts emitted by severity",
       "description": "",
@@ -1068,9 +1195,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 16,
-        "y": 22,
-        "w": 8,
+        "x": 0,
+        "y": 30,
+        "w": 12,
         "h": 8
       },
       "targets": [
@@ -1198,30 +1325,30 @@
       }
     },
     {
-      "id": 15,
+      "id": 17,
       "type": "row",
-      "title": "Diagnostic service (REQ-G / REQ-H / REQ-I)",
+      "title": "Diagnostic service — Anomaly Detection (REQ-016 to REQ-020)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 38,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 16,
+      "id": 18,
       "type": "timeseries",
-      "title": "Diagnoses by outcome",
-      "description": "",
+      "title": "Anomaly scores",
+      "description": "anomaly_score histogram (REQ-016) against the runtime threshold (REQ-020).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 31,
+        "y": 39,
         "w": 6,
         "h": 8
       },
@@ -1232,8 +1359,19 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (outcome) (increase(diagnoses_total[5m]))",
-          "legendFormat": "{{outcome}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(anomaly_score_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(anomaly_threshold)",
+          "legendFormat": "threshold",
           "range": true,
           "instant": false
         }
@@ -1252,168 +1390,12 @@
             "showPoints": "never",
             "spanNulls": true,
             "stacking": {
-              "mode": "normal",
+              "mode": "none",
               "group": "A"
             },
             "thresholdsStyle": {
               "mode": "off"
             }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ok"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "green"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "valid"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "green"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "fallback"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "invalid"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "yellow"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "error"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 17,
-      "type": "timeseries",
-      "title": "Diagnosis latency p95",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 6,
-        "y": 31,
-        "w": 6,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "service:diagnosis_latency_seconds:p95_5m",
-          "legendFormat": "diagnosis p95",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "transparent",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 30
-              }
-            ]
           }
         },
         "overrides": []
@@ -1434,17 +1416,17 @@
       }
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "timeseries",
-      "title": "LLM latency p95 / failures",
-      "description": "",
+      "title": "Events scored",
+      "description": "Events scored per second: kafka = normalized-events consumer, http = POST /score.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 31,
+        "x": 6,
+        "y": 39,
         "w": 6,
         "h": 8
       },
@@ -1455,19 +1437,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "provider:llm_request_seconds:p95_5m",
-          "legendFormat": "p95 {{provider}}",
-          "range": true,
-          "instant": false
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (provider) (increase(llm_failures_total[5m]))",
-          "legendFormat": "failures {{provider}}",
+          "expr": "sum by (source) (rate(anomaly_events_scored_total[5m]))",
+          "legendFormat": "{{source}}",
           "range": true,
           "instant": false
         }
@@ -1478,7 +1449,7 @@
             "mode": "palette-classic"
           },
           "mappings": [],
-          "unit": "s",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1494,31 +1465,7 @@
             }
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "legend": {
@@ -1536,17 +1483,17 @@
       }
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "timeseries",
-      "title": "Graph context latency p95 (REQ-G)",
-      "description": "",
+      "title": "Anomalies detected",
+      "description": "anomalies_detected_total rate (REQ-017).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 18,
-        "y": 31,
+        "x": 12,
+        "y": 39,
         "w": 6,
         "h": 8
       },
@@ -1557,8 +1504,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "service:graph_context_seconds:p95_5m",
-          "legendFormat": "p95",
+          "expr": "service:anomalies_detected:rate5m",
+          "legendFormat": "detected/s",
           "range": true,
           "instant": false
         }
@@ -1569,7 +1516,74 @@
             "mode": "palette-classic"
           },
           "mappings": [],
-          "unit": "s",
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Audit-publish failures",
+      "description": "anomaly_audit_publish_failures_total (REQ-019).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 39,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "service:anomaly_audit_publish_failures:increase30m",
+          "legendFormat": "failures/30m",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "short",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1616,19 +1630,32 @@
       }
     },
     {
-      "id": 20,
+      "id": 22,
+      "type": "row",
+      "title": "Archival — Kafka → S3 (REQ-028)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 23,
       "type": "timeseries",
-      "title": "Playbooks stored",
-      "description": "",
+      "title": "Records archived",
+      "description": "archive_records_total rate per topic (raw-events, normalized-events).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 39,
-        "w": 8,
-        "h": 6
+        "y": 48,
+        "w": 12,
+        "h": 7
       },
       "targets": [
         {
@@ -1637,8 +1664,86 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(playbooks_stored_total[5m]))",
-          "legendFormat": "stored / 5m",
+          "expr": "topic:archive_records:rate5m",
+          "legendFormat": "{{topic}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "S3 upload failures / last success age",
+      "description": "Failed batches are rewound and retried; EventArchiveStalled fires after 15 min without an upload.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "service:archive_failures:increase15m",
+          "legendFormat": "failures/15m",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "time() - max(archive_last_success_timestamp_seconds)",
+          "legendFormat": "seconds since last upload",
           "range": true,
           "instant": false
         }
@@ -1683,20 +1788,20 @@
       }
     },
     {
-      "id": 21,
+      "id": 25,
       "type": "row",
       "title": "Process resources",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 55,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 22,
+      "id": 26,
       "type": "timeseries",
       "title": "Resident memory",
       "description": "",
@@ -1706,7 +1811,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 56,
         "w": 12,
         "h": 7
       },
@@ -1717,7 +1822,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service) (process_resident_memory_bytes{service=~\".+-service\"})",
+          "expr": "sum by (service) (process_resident_memory_bytes{service=~\".+-(service|archiver)\"})",
           "legendFormat": "{{service}}",
           "range": true,
           "instant": false
@@ -1763,7 +1868,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 27,
       "type": "timeseries",
       "title": "CPU",
       "description": "Python: rate(process_cpu_seconds_total); JVM: process_cpu_usage.",
@@ -1773,7 +1878,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 56,
         "w": 12,
         "h": 7
       },
@@ -1784,7 +1889,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service) (rate(process_cpu_seconds_total{service=~\".+-service\"}[5m]))",
+          "expr": "sum by (service) (rate(process_cpu_seconds_total{service=~\".+-(service|archiver)\"}[5m]))",
           "legendFormat": "{{service}}",
           "range": true,
           "instant": false

@@ -31,7 +31,7 @@ tests:
               description: "Prometheus has failed to scrape ingestion-service (ingestion-service:8080) for more than 1 minute."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/service-down.md"
 
-  # ── IngestionConsumerLagHigh (REQ-A: 5000 records ≈ 500 ms @ 10k ev/s) ─────
+  # ── IngestionConsumerLagHigh (REQ-001/REQ-004: 5000 records ≈ 500 ms @ 10k ev/s) ─
   - interval: 1m
     input_series:
       - series: 'kafka_consumer_fetch_manager_records_lag_max{service="ingestion-service", client_id="consumer-1"}'
@@ -47,39 +47,79 @@ tests:
               severity: critical
               service: ingestion-service
             exp_annotations:
-              summary: "Ingestion consumer lag > 5000 records (> 500 ms at 10k ev/s, REQ-A)"
+              summary: "Ingestion consumer lag > 5000 records (> 500 ms at 10k ev/s, REQ-001/REQ-004)"
               description: "Max records lag is 6000 records for 5 minutes."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/ingestion-consumer-lag-high.md"
 
-  # ── DiagnosticFallbackRatioHigh fires when an LLM is configured but failing ──
+  # ── AnomalyAuditPublishFailing ────────────────────────────────────────────
+  # The expected "30" assumes the 30m increase() window at eval_time 60m falls
+  # entirely within the linear counter growth starting at t=0.
   - interval: 1m
     input_series:
-      - series: 'diagnoses_total{service="diagnostic-service", outcome="fallback"}'
-        values: '0+10x60'
-      - series: 'diagnoses_total{service="diagnostic-service", outcome="ok"}'
-        values: '0+1x60'
-      - series: 'llm_failures_total{service="diagnostic-service", provider="ollama"}'
-        values: '0+10x60'
+      - series: 'anomaly_audit_publish_failures_total{service="diagnostic-service"}'
+        values: '0+1x90'
     alert_rule_test:
-      - eval_time: 50m
-        alertname: DiagnosticFallbackRatioHigh
+      - eval_time: 60m
+        alertname: AnomalyAuditPublishFailing
         exp_alerts:
           - exp_labels:
               severity: warning
               service: diagnostic-service
             exp_annotations:
-              summary: "More than 50% of diagnoses fell back to rule-based playbooks (LLM degraded)"
-              description: "Fallback ratio is 90.91% over 30m while an LLM provider is configured."
-              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/diagnostic-fallback-ratio-high.md"
+              summary: "diagnostic-service is failing to publish anomalies to the audit topic"
+              description: "30 audit-publish failures in the last 30m (REQ-019 at risk)."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/anomaly-audit-publish-failing.md"
 
-  # ── ...but stays silent when LLM_PROVIDER=none (100% fallback is expected) ───
+  # ── EventArchiveUploadFailing (REQ-028) ──────────────────────────────────
   - interval: 1m
     input_series:
-      - series: 'diagnoses_total{service="diagnostic-service", outcome="fallback"}'
-        values: '0+10x60'
+      - series: 'archive_failures_total{service="event-archiver", topic="raw-events"}'
+        values: '0+1x40'
     alert_rule_test:
-      - eval_time: 50m
-        alertname: DiagnosticFallbackRatioHigh
+      - eval_time: 30m
+        alertname: EventArchiveUploadFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: event-archiver
+            exp_annotations:
+              summary: "event-archiver is failing to write batches to S3"
+              description: "15 failed S3 uploads in the last 15m. Records are rewound and retried, so nothing is lost yet, but the archive (REQ-028) is falling behind."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/event-archive-failing.md"
+
+  # ── EventArchiveStalled: fires only while events are flowing ─────────────────
+  - interval: 1m
+    input_series:
+      - series: 'archive_last_success_timestamp_seconds{service="event-archiver"}'
+        values: '0x30'
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="valid"}'
+        values: '0+100x30'
+    alert_rule_test:
+      # time() - 0 exceeds 900 s after minute 15, plus `for: 5m`
+      - eval_time: 14m
+        alertname: EventArchiveStalled
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: EventArchiveStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: event-archiver
+            exp_annotations:
+              summary: "No events archived to S3 for 15+ minutes"
+              description: "Ingestion is processing events but event-archiver has not completed an upload in 15m (REQ-028)."
+              runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/event-archive-failing.md"
+
+  - interval: 1m
+    input_series:
+      # healthy: a successful upload every minute
+      - series: 'archive_last_success_timestamp_seconds{service="event-archiver"}'
+        values: '0+60x30'
+      - series: 'ingestion_events_total{service="ingestion-service", outcome="valid"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EventArchiveStalled
         exp_alerts: []
 
   # ── PredictiveAlertCritical catches a brand-new labelled series ──────────────
@@ -100,9 +140,9 @@ tests:
               component: kafka
             exp_annotations:
               summary: "Critical predicted breach for kafka"
-              description: "The forecasting service predicts a >= 50% threshold overshoot for kafka. Open the AIOps Overview dashboard for the alert and its playbook."
+              description: "The forecasting service predicts a >= 50% threshold overshoot for kafka. Check the Service Health dashboard and GET /alerts."
               runbook_url: "https://github.com/soumadipcodeEnthusiast/ai-driven-event-processing-system/blob/main/docs/runbooks/predictive-alert-critical.md"
-              dashboard: "http://localhost:3000/d/aiops-overview"
+              dashboard: "http://localhost:9030/d/aiops-service-health"
       - eval_time: 18m
         alertname: PredictiveAlertCritical
         exp_alerts: []

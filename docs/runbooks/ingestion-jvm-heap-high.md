@@ -6,7 +6,7 @@
 | **Severity** | warning |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 JVM heap usage of an ingestion instance has been > 90 % for 10 minutes.
 
@@ -27,7 +27,7 @@ jvm_threads_live_threads{service="ingestion-service"}
 ```
 ```bash
 kubectl -n event-processor describe pod <pod> | grep -A3 "Last State"     # OOMKilled?
-curl -s localhost:8080/actuator/metrics/jvm.memory.used
+curl -s localhost:9080/actuator/metrics/jvm.memory.used
 ```
 
 ## Mitigation
@@ -39,5 +39,5 @@ curl -s localhost:8080/actuator/metrics/jvm.memory.used
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

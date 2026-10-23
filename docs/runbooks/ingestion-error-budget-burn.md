@@ -6,7 +6,7 @@
 | **Severity** | critical / warning |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/slo-burn-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 Events ending in `outcome="error"` (unexpected failure after 3 retries → DLT) are burning the 99.9 % ingestion availability error budget. `critical` = fast burn (page), `warning` = slow burn (ticket).
 
@@ -42,5 +42,5 @@ serialization bug introduced by a deploy, broker disk full.
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

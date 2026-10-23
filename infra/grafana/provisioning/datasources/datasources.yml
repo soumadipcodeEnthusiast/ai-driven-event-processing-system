@@ -21,19 +21,8 @@ datasources:
       httpMethod: POST
       timeInterval: 15s
 
-  # REST/JSON datasource used for the REQ-K live alert + playbook feed.
-  # Requires plugin yesoreyeram-infinity-datasource (GF_INSTALL_PLUGINS).
-  # Queries run server-side, so in-cluster DNS names are used
-  # (forecasting-service:8081, diagnostic-service:8082).
-  - name: Infinity
-    uid: infinity
-    type: yesoreyeram-infinity-datasource
-    access: proxy
-    orgId: 1
-    isDefault: false
-    editable: false
-    jsonData:
-      global_queries: []
-      allowedHosts:
-        - http://forecasting-service:8081
-        - http://diagnostic-service:8082
+# The Infinity datasource (yesoreyeram-infinity-datasource) and the
+# aiops-overview dashboard that used it to read /alerts and /playbooks are
+# removed along with the GraphRAG/LLM/playbook design — see docs/adr/0008.
+# `deleteDatasources` above still removes it from any Grafana instance
+# provisioned by an earlier version of this file.

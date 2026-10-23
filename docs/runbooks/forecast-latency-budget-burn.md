@@ -6,9 +6,9 @@
 | **Severity** | critical / warning |
 | **Service** | forecasting-service |
 | **Rule file** | `infra/prometheus/rules/slo-burn-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
-Too many forecasts take ≥ 2 s (REQ-D latency SLO, 99 %).
+Too many forecasts take ≥ 2 s (REQ-021 latency SLO, 99 %).
 
 ## Symptoms
 
@@ -16,7 +16,7 @@ Too many forecasts take ≥ 2 s (REQ-D latency SLO, 99 %).
 
 ## Impact
 
-REQ-D acceptance criterion violated; the forecast loop (every 60 s for all components) may start overrunning its interval, delaying alerts and eating lead time.
+REQ-021 acceptance criterion violated; the forecast loop (every 60 s for all components) may start overrunning its interval, delaying alerts and eating lead time.
 
 ## Diagnosis
 
@@ -28,7 +28,7 @@ histogram_quantile(0.95, sum by (le) (rate(prometheus_http_request_duration_seco
 ```
 ```bash
 docker compose -f infra/docker-compose.yml stats forecasting-service prometheus
-time curl -s -XPOST localhost:8081/forecast -H 'content-type: application/json' \
+time curl -s -XPOST localhost:9081/forecast -H 'content-type: application/json' \
   -d '{"component_id":"ingestion-service","forecast_window_minutes":60}' >/dev/null
 ```
 
@@ -42,5 +42,5 @@ time curl -s -XPOST localhost:8081/forecast -H 'content-type: application/json' 
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

@@ -6,13 +6,13 @@
 | **Severity** | critical |
 | **Service** | forecasting-service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
 forecasting-service is up but recorded no forecast runs at all for 10 minutes.
 
 ## Symptoms
 
-`forecast_runs_total` flat; no new alerts on the REQ-K dashboard even under load.
+`forecast_runs_total` flat; no new alerts on the REQ-034 dashboard even under load.
 
 ## Impact
 
@@ -40,5 +40,5 @@ or a forecast that hangs forever (no timeout on the Prometheus client).
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

@@ -6,9 +6,9 @@
 | **Severity** | critical / warning |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/slo-burn-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
-Too many events take ≥ 500 ms to process (REQ-A latency SLO, 99 %).
+Too many events take ≥ 500 ms to process (REQ-004 latency SLO, 99 %).
 
 ## Symptoms
 
@@ -16,7 +16,7 @@ Too many events take ≥ 500 ms to process (REQ-A latency SLO, 99 %).
 
 ## Impact
 
-Events reach `normalized-events` late; REQ-A acceptance criterion at risk; forecasts see stale data.
+Events reach `normalized-events` late; REQ-004 acceptance criterion at risk; forecasts see stale data.
 
 ## Diagnosis
 
@@ -43,5 +43,5 @@ kubectl -n event-processor get hpa ingestion-service-hpa
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.

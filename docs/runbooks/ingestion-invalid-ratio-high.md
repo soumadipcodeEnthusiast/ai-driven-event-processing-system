@@ -6,9 +6,9 @@
 | **Severity** | warning |
 | **Service** | ingestion-service |
 | **Rule file** | `infra/prometheus/rules/aiops-alerts.yml` |
-| **Dashboards** | [AIOps Overview](http://localhost:3000/d/aiops-overview) · [Service Health](http://localhost:3000/d/aiops-service-health) · [SLOs](http://localhost:3000/d/aiops-slo) |
+| **Dashboards** | [Service Health](http://localhost:9030/d/aiops-service-health) · [SLOs](http://localhost:9030/d/aiops-slo) |
 
-More than 5 % of raw events fail validation and are routed to `raw-events.DLT` (REQ-B).
+More than 5 % of raw events fail validation and are routed to `raw-events.DLT` (REQ-005).
 
 ## Symptoms
 
@@ -16,7 +16,7 @@ More than 5 % of raw events fail validation and are routed to `raw-events.DLT` (
 
 ## Impact
 
-Rejected events never reach `normalized-events`, so forecasts and diagnoses miss that data. The ingestion service itself is healthy — it is doing its job (REQ-B).
+Rejected events never reach `normalized-events`, so forecasts and diagnoses miss that data. The ingestion service itself is healthy — it is doing its job (REQ-005).
 
 ## Diagnosis
 
@@ -44,5 +44,5 @@ Group by `source` / reason: a single producer or a schema change (e.g. new top-l
 ## Escalation
 
 1. Service owner (see table in [README](README.md#ownership)).
-2. If not acknowledged within 15 min for `critical`, escalate to the SRE on-call.
+2. If not acknowledged within 15 min for `critical`, escalate to the DevOps Engineer on-call.
 3. If customer-visible for > 30 min, declare an incident (SEV-2) and open a postmortem.
