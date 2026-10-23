@@ -13,7 +13,6 @@ import respx
 
 from app.alerts import AlertSeverity, AlertStatus, AlertStore, PredictiveAlert, severity_for
 from app.components import ComponentConfigStore, UnknownMetricError
-from app.diagnostic_client import DiagnosticClient
 from app.forecasters import (
     FallbackForecaster,
     ForecasterError,
@@ -23,7 +22,6 @@ from app.forecasters import (
 from app.forecasting_engine import ForecastingEngine
 from app.metric_client import MetricClient, MetricClientError, parse_duration_seconds
 from tests.conftest import (
-    DIAG,
     NOW,
     PROM,
     FakePrometheus,
@@ -96,13 +94,13 @@ def test_statistical_forecaster_needs_data() -> None:
 
 def test_forecaster_selection_without_ml(tmp_path: Path) -> None:
     assert build_forecaster("statistical", "", "v").name == "statistical"
-    assert build_forecaster("auto", str(tmp_path / "missing.ckpt"), "v").name == "statistical"
-    assert build_forecaster("tft", str(tmp_path / "missing.ckpt"), "v").name == "statistical"
+    assert build_forecaster("auto", str(tmp_path / "missing"), "v").name == "statistical"
+    assert build_forecaster("ml", str(tmp_path / "missing"), "v").name == "statistical"
 
 
 def test_fallback_forecaster_uses_secondary_on_error() -> None:
     class Broken(StatisticalForecaster):
-        name = "tft"
+        name = "ml"
 
         def predict(self, *a: object, **k: object):
             raise RuntimeError("boom")
@@ -121,7 +119,7 @@ def test_forecast_latency_under_two_seconds(
     assert time.perf_counter() - t0 < 2.0
 
 
-# ─── engine: lead time, dedup, hand-off ─────────────────────────────────────
+# ─── engine: lead time, dedup ────────────────────────────────────────────────
 
 
 def test_alert_emitted_with_sufficient_lead(
@@ -137,9 +135,8 @@ def test_alert_emitted_with_sufficient_lead(
     assert alert["status"] == "open"
     assert alert["model_version"] == "statistical-holt-damped-1.0"
     assert res["details"]["metrics"]["memory_utilisation"]["outcome"] == "no_breach"
-    engine.wait_for_handoffs()
     stored = engine.alerts.get(alert["alert_id"])
-    assert stored is not None and stored.playbook_id == "pb-ingestion-service-0123abcd"
+    assert stored is not None
 
 
 def test_alert_matches_contract_schema(engine: ForecastingEngine, prom: FakePrometheus) -> None:
@@ -148,7 +145,6 @@ def test_alert_matches_contract_schema(engine: ForecastingEngine, prom: FakeProm
         pytest.skip("contracts/ not available")
     ingestion_breach_series(prom)
     res = engine.run_cycle("ingestion-service")
-    engine.wait_for_handoffs()
     schema = json.loads(SCHEMA.read_text())
     jsonschema.validate(res["alert"], schema)
     jsonschema.validate(engine.alerts.get(res["alert"]["alert_id"]).to_dict(), schema)  # type: ignore[union-attr]
@@ -243,9 +239,6 @@ def test_run_all_never_raises(engine: ForecastingEngine, prom: FakePrometheus) -
     assert "zookeeper" not in outcomes  # forecast-disabled
 
 
-# ─── diagnostic hand-off retries ────────────────────────────────────────────
-
-
 def _alert() -> PredictiveAlert:
     return PredictiveAlert(
         "al-000000000001",
@@ -259,44 +252,6 @@ def _alert() -> PredictiveAlert:
         NOW,
         "v",
     )
-
-
-@respx.mock
-def test_handoff_retries_on_5xx_then_succeeds() -> None:
-    route = respx.post(f"{DIAG}/diagnose/kafka").mock(
-        side_effect=[
-            httpx.Response(503),
-            httpx.Response(200, json={"playbook_id": "pb-kafka-deadbeef"}),
-        ]
-    )
-    client = DiagnosticClient(DIAG, sleep=lambda _s: None)
-    assert client.diagnose("kafka", "al-000000000001", [_alert().anomaly()]) == "pb-kafka-deadbeef"
-    assert route.call_count == 2
-    body = json.loads(route.calls[0].request.content)
-    assert body["alert_id"] == "al-000000000001"
-    assert set(body["anomalies"][0]) == {
-        "metric_name",
-        "predicted_value",
-        "threshold",
-        "predicted_breach_time",
-        "severity",
-    }
-
-
-@respx.mock
-def test_handoff_never_retries_4xx() -> None:
-    route = respx.post(f"{DIAG}/diagnose/kafka").mock(return_value=httpx.Response(404))
-    assert DiagnosticClient(DIAG, sleep=lambda _s: None).diagnose("kafka", "al-1", []) is None
-    assert route.call_count == 1
-
-
-@respx.mock
-def test_handoff_three_attempts_total_on_network_error() -> None:
-    route = respx.post(f"{DIAG}/diagnose/kafka").mock(side_effect=httpx.ConnectError("x"))
-    sleeps: list[float] = []
-    assert DiagnosticClient(DIAG, sleep=sleeps.append).diagnose("kafka", "al-1", []) is None
-    assert route.call_count == 3
-    assert sleeps == [1.0, 2.0]
 
 
 # ─── alert store ────────────────────────────────────────────────────────────
@@ -315,7 +270,7 @@ def test_alert_store_transitions() -> None:
     assert store.transition("al-missing", AlertStatus.RESOLVED) is None
 
 
-# ─── components config hot reload (REQ-F) ───────────────────────────────────
+# ─── components config hot reload (REQ-052) ─────────────────────────────────
 
 
 def _bump(path: Path, text: str) -> None:
@@ -355,8 +310,6 @@ def test_all_contract_component_ids_present(components_file: Path) -> None:
         "kafka",
         "zookeeper",
         "prometheus",
-        "graph-db",
-        "llm",
     }
 
 
@@ -398,18 +351,3 @@ def test_parse_duration() -> None:
     assert parse_duration_seconds("15") == 15
     with pytest.raises(ValueError):
         parse_duration_seconds("abc")
-
-
-@respx.mock
-def test_handoff_retries_429_honouring_retry_after() -> None:
-    route = respx.post(f"{DIAG}/diagnose/kafka").mock(
-        side_effect=[
-            httpx.Response(429, headers={"Retry-After": "7"}),
-            httpx.Response(200, json={"playbook_id": "pb-kafka-deadbeef"}),
-        ]
-    )
-    sleeps: list[float] = []
-    client = DiagnosticClient(DIAG, sleep=sleeps.append)
-    assert client.diagnose("kafka", "al-1", []) == "pb-kafka-deadbeef"
-    assert route.call_count == 2
-    assert sleeps == [7.0]

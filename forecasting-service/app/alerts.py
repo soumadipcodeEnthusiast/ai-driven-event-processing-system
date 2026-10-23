@@ -95,6 +95,7 @@ class PredictiveAlert:
     created_at: datetime
     model_version: str
     status: AlertStatus = AlertStatus.OPEN
+    # GraphRAG root-cause playbook from diagnostic-service; None until it answers.
     playbook_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -114,17 +115,21 @@ class PredictiveAlert:
         }
 
     def anomaly(self) -> dict[str, Any]:
-        """Item for the ``/diagnose`` body ``anomalies[]`` (ARCHITECTURE §10.1)."""
+        """Item for the diagnostic-service ``/diagnose`` body ``anomalies[]``."""
         d = self.to_dict()
         return {
-            k: d[k]
-            for k in (
-                "metric_name",
-                "predicted_value",
-                "threshold",
-                "predicted_breach_time",
-                "severity",
-            )
+            "kind": "predicted_breach",
+            **{
+                k: d[k]
+                for k in (
+                    "metric_name",
+                    "predicted_value",
+                    "threshold",
+                    "predicted_breach_time",
+                    "severity",
+                    "lead_time_minutes",
+                )
+            },
         }
 
 

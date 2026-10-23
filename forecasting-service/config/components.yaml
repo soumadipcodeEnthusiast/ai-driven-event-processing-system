@@ -1,5 +1,5 @@
 # ─── forecasting-service/config/components.yaml ───────────────────────────────
-# Per-component PromQL + breach thresholds (REQ-D, REQ-F).
+# Per-component PromQL + breach thresholds (REQ-021, REQ-025).
 #
 # * Hot-reloaded: the file is re-read whenever its mtime changes — no restart.
 # * Runtime overrides: PUT /thresholds/{component_id} {"<metric>": <float>}
@@ -11,8 +11,7 @@
 #
 # Label conventions (infra/prometheus.yml): every application scrape job adds
 # service="<job name>"; Prometheus self-scrape is job="prometheus".
-# zookeeper, graph-db and llm expose no Prometheus metrics yet, so they are not
-# forecast (they are still part of the diagnostic dependency graph).
+# zookeeper exposes no Prometheus metrics yet, so it is not forecast.
 
 defaults:
   history_minutes: 180          # look-back window fed to the forecaster
@@ -50,7 +49,7 @@ components:
       cpu_utilisation:
         query: max(rate(process_cpu_seconds_total{service="forecasting-service"}[2m]))
         threshold: 0.80
-      memory_utilisation:       # RSS against a 2 GiB budget (torch may be loaded)
+      memory_utilisation:       # RSS against a 2 GiB budget (tensorflow may be loaded)
         query: max(process_resident_memory_bytes{service="forecasting-service"}) / 2147483648
         threshold: 0.85
       error_rate:
@@ -90,11 +89,7 @@ components:
           (clamp_min(sum(rate(prometheus_http_requests_total{job="prometheus"}[5m])), 1e-9) or vector(1))
         threshold: 0.05
 
-  # No exporters yet (ARCHITECTURE §10.8): forecast-disabled, kept so that
+  # No exporter yet (ARCHITECTURE §10.8): forecast-disabled, kept so that
   # GET /thresholds lists every monitored component id.
   zookeeper:
-    enabled: false
-  graph-db:
-    enabled: false
-  llm:
     enabled: false

@@ -36,6 +36,11 @@ PREDICTIVE_ALERTS_OPEN = Gauge(
     "predictive_alerts_open",
     "Number of predictive alerts currently in status 'open'.",
 )
+LOW_CONFIDENCE_PREDICTIONS = Counter(
+    "predictions_low_confidence_total",
+    "Metric forecasts flagged low-confidence (REQ-025), by component.",
+    ["component"],
+)
 FORECASTER_INFO = Gauge(
     "forecaster_info",
     "Active forecaster implementation (value is always 1).",

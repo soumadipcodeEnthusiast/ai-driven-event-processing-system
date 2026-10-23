@@ -5,7 +5,7 @@ Wraps ``/api/v1/query_range`` and ``/api/v1/query`` to retrieve metric
 time-series for ForecastingEngine.
 
 Requirements:
-    REQ-D — Metric data must be polled from Prometheus for forecaster input.
+    REQ-021 — Metric data must be polled from Prometheus for forecaster input.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ class MetricClient:
         """
         Execute a Prometheus range query and return ``data.result``.
 
-        REQ-D: retrieves historical metric samples over the forecasting window.
+        REQ-021: retrieves historical metric samples over the forecasting window.
 
         Args:
             promql: PromQL expression.
