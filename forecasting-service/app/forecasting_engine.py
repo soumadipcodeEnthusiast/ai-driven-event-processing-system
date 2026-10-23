@@ -1,13 +1,18 @@
 """
 forecasting_engine.py — metric forecasting and predictive alerting.
 
-Requirements:
-    REQ-D — Poll Prometheus metrics and run probabilistic forecasting
-            (TFT when available, damped-trend Holt otherwise).
-    REQ-E — Emit a PredictiveAlert at least ALERT_MIN_LEAD_MINUTES before a
-            predicted (p90) breach.
-    REQ-F — Thresholds configurable without redeployment (components.yaml
-            hot reload + PUT /thresholds).
+Requirements (SRS v1.0 §4.5, Predictive Analytics):
+    REQ-021 — Poll Prometheus metrics and run time-series forecasting
+              (Temporal Fusion Transformer when trained, else the ar-ridge
+              model, else damped-trend Holt).
+    REQ-022 — Refresh predictions at a configurable interval.
+    REQ-023/024 — Record every forecast, versioned, in a PredictionStore
+              (served by GET /predictions).
+    REQ-025 — Emit a PredictiveAlert at least ALERT_MIN_LEAD_MINUTES before a
+              predicted (p90) breach; flags low-confidence predictions.
+
+Every new alert is handed to diagnostic-service (``POST /diagnose``) in the
+background; its GraphRAG playbook id is stored on the alert (docs/adr/0010).
 """
 
 from __future__ import annotations
@@ -38,7 +43,13 @@ from app.config import Settings, resolve_path
 from app.diagnostic_client import DiagnosticClient
 from app.forecasters import Forecaster, ForecasterError, build_forecaster
 from app.metric_client import MetricClient, MetricClientError, parse_duration_seconds
-from app.metrics import FORECAST_LATENCY, FORECAST_RUNS, set_forecaster_info
+from app.metrics import (
+    FORECAST_LATENCY,
+    FORECAST_RUNS,
+    LOW_CONFIDENCE_PREDICTIONS,
+    set_forecaster_info,
+)
+from app.predictive_analytics import PredictionStore, band_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +79,7 @@ class ForecastingEngine:
         config_store: ComponentConfigStore | None = None,
         forecaster: Forecaster | None = None,
         alert_store: AlertStore | None = None,
+        prediction_store: PredictionStore | None = None,
         diagnostic_client: DiagnosticClient | None = None,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
@@ -83,25 +95,34 @@ class ForecastingEngine:
         )
         self.config = config_store or ComponentConfigStore(resolve_path(settings.components_config))
         self.forecaster = forecaster or build_forecaster(
-            settings.forecaster, settings.tft_model_path, settings.tft_model_version
+            settings.forecaster,
+            settings.ml_model_path,
+            settings.ml_model_version,
+            settings.tft_model_path,
+            settings.tft_model_version,
         )
         self.model_version: str = (
             self.forecaster.model_version
-            if self.forecaster.name == "tft"
+            if self.forecaster.name in ("ml", "tft")
             else f"statistical-{self.forecaster.model_version}"
         )
         set_forecaster_info(self.forecaster.name, self.model_version)
 
         self.alerts = alert_store or AlertStore()
-        self.diagnostic = diagnostic_client or DiagnosticClient(
-            settings.diagnostic_url,
-            timeout=settings.diagnostic_timeout_seconds,
-            attempts=settings.diagnostic_retries,
-            backoff_seconds=settings.diagnostic_backoff_seconds,
-        )
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="diag-handoff")
+        self.diagnostic: DiagnosticClient | None = diagnostic_client
+        if self.diagnostic is None and settings.diagnostic_handoff_enabled:
+            self.diagnostic = DiagnosticClient(
+                settings.diagnostic_url,
+                timeout=settings.diagnostic_timeout_seconds,
+                attempts=settings.diagnostic_retries,
+                backoff_seconds=settings.diagnostic_backoff_seconds,
+            )
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="diagnose")
         self._pending: list[Future[None]] = []
         self._pending_lock = threading.Lock()
+        self.predictions = prediction_store or PredictionStore(
+            resolve_path(settings.predictions_path) if settings.predictions_path else None
+        )
         logger.info(
             "ForecastingEngine initialised (forecaster=%s, model_version=%s, window=%dm)",
             self.forecaster.name,
@@ -109,7 +130,7 @@ class ForecastingEngine:
             self.forecast_window_minutes,
         )
 
-    # ── REQ-D: polling ─────────────────────────────────────────────────────
+    # ── REQ-021: polling ───────────────────────────────────────────────────
 
     def _poll(
         self, component_id: str, history_minutes: int | None = None
@@ -158,7 +179,7 @@ class ForecastingEngine:
         """
         Poll Prometheus for the configured metrics of *component_id*.
 
-        REQ-D: retrieves CPU utilisation, memory utilisation and request
+        REQ-021: retrieves CPU utilisation, memory utilisation and request
         error rate (as configured in components.yaml) over the component's
         history window.
 
@@ -171,7 +192,7 @@ class ForecastingEngine:
         """
         return self._poll(component_id, history_minutes)[0]
 
-    # ── REQ-D/E: forecasting ───────────────────────────────────────────────
+    # ── REQ-021: forecasting ───────────────────────────────────────────────
 
     def _regularise(self, ts: np.ndarray, vals: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Interpolate onto an evenly spaced grid (fills scrape gaps)."""
@@ -185,8 +206,9 @@ class ForecastingEngine:
         """
         Run the forecaster over each metric series.
 
-        REQ-E: each forecast contains point estimates and the 90th-percentile
-        upper band for every step of the horizon.
+        REQ-021/REQ-025: each forecast contains point estimates and the
+        90th-percentile upper band for every step of the horizon — the band
+        width is this codebase's stand-in for a confidence signal.
 
         Returns:
             ``{metric_name: {"status": "ok", "timestamps": [...], "point": [...],
@@ -218,7 +240,11 @@ class ForecastingEngine:
                 out[name] = {"status": "insufficient_data", "points": len(vals), "reason": str(exc)}
                 continue
             future_ts = ts[-1] + self.step_seconds * np.arange(1, horizon + 1)
+            # REQ-025: confidence from the p90 band width at the horizon end
+            confidence = band_confidence(fc.point, fc.upper_90, float(np.mean(np.abs(vals))))
             out[name] = {
+                "confidence": confidence,
+                "low_confidence": confidence < self.settings.prediction_min_confidence,
                 "status": "ok",
                 "timestamps": future_ts.tolist(),
                 "point": fc.point.tolist(),
@@ -230,7 +256,7 @@ class ForecastingEngine:
             }
         return out
 
-    # ── REQ-E/F: threshold evaluation ──────────────────────────────────────
+    # ── REQ-025/REQ-052: threshold evaluation ──────────────────────────────
 
     def evaluate_thresholds(
         self, component_id: str, forecast_result: dict[str, Any]
@@ -257,6 +283,8 @@ class ForecastingEngine:
                 last_value=round(fc["last_value"], 6),
                 max_point=round(float(point.max()), 6),
                 max_upper_90=round(float(upper.max()), 6),
+                confidence=fc["confidence"],
+                low_confidence=fc["low_confidence"],
             )
             crossing = np.nonzero(upper > spec.threshold)[0]
             if crossing.size == 0:
@@ -317,7 +345,7 @@ class ForecastingEngine:
         """
         Compare forecast p90 bands against the (hot-reloadable) thresholds.
 
-        REQ-E: an alert is created only when the p90 forecast first crosses
+        REQ-025: an alert is created only when the p90 forecast first crosses
         the threshold at least ALERT_MIN_LEAD_MINUTES in the future, and only
         if no open/acknowledged alert exists for (component, metric).
 
@@ -348,6 +376,7 @@ class ForecastingEngine:
             observations, poll_errors = self._poll(component_id)
             forecast_result = self.forecast(observations, window)
             created, summary = self.evaluate_thresholds(component_id, forecast_result)
+            self._record_predictions(component_id, forecast_result)
         except Exception:
             FORECAST_RUNS.labels(component=component_id, outcome="error").inc()
             raise
@@ -364,6 +393,7 @@ class ForecastingEngine:
 
         for alert in created:
             self.notify_diagnostic(alert)
+
         best = self._pick(created)
         return {
             "component_id": component_id,
@@ -381,6 +411,30 @@ class ForecastingEngine:
             },
         }
 
+    def _record_predictions(self, component_id: str, forecast_result: dict[str, Any]) -> None:
+        """REQ-024: keep every forecast, tagged with the model that produced it."""
+        created_at = utc_iso(self._clock())
+        for name, fc in forecast_result.items():
+            if fc.get("status") != "ok":
+                continue
+            if fc["low_confidence"]:
+                LOW_CONFIDENCE_PREDICTIONS.labels(component=component_id).inc()
+            self.predictions.record(
+                {
+                    "component_id": component_id,
+                    "metric_name": name,
+                    "model_version": self.model_version,
+                    "forecaster": fc["forecaster"],
+                    "created_at": created_at,
+                    "step_seconds": self.step_seconds,
+                    "timestamps": fc["timestamps"],
+                    "point": [round(v, 6) for v in fc["point"]],
+                    "upper_90": [round(v, 6) for v in fc["upper_90"]],
+                    "confidence": fc["confidence"],
+                    "low_confidence": fc["low_confidence"],
+                }
+            )
+
     def run_all(self) -> dict[str, str]:
         """One background iteration over all enabled components; never raises."""
         outcomes: dict[str, str] = {}
@@ -393,9 +447,11 @@ class ForecastingEngine:
                 outcomes[component_id] = "error"
         return outcomes
 
-    # ── diagnostic hand-off (ADR 0001) ─────────────────────────────────────
+    # ── GraphRAG hand-off (diagnostic-service) ─────────────────────────────
 
     def _handoff(self, alert: PredictiveAlert) -> None:
+        if self.diagnostic is None:
+            return
         try:
             pb = self.diagnostic.diagnose(alert.component_id, alert.alert_id, [alert.anomaly()])
         except Exception as exc:
@@ -406,7 +462,9 @@ class ForecastingEngine:
             logger.info("alert %s linked to playbook %s", alert.alert_id, pb)
 
     def notify_diagnostic(self, alert: PredictiveAlert) -> None:
-        """Asynchronously request a playbook so /forecast stays fast (< 2 s)."""
+        """Request a playbook in the background so /forecast stays fast."""
+        if self.diagnostic is None:
+            return
         fut: Future[None] = self._executor.submit(self._handoff, alert)
         with self._pending_lock:
             self._pending = [f for f in self._pending if not f.done()] + [fut]
@@ -421,5 +479,6 @@ class ForecastingEngine:
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
+        if self.diagnostic is not None:
+            self.diagnostic.close()
         self.metric_client.close()
-        self.diagnostic.close()
