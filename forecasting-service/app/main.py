@@ -1,13 +1,18 @@
 """
 forecasting-service — FastAPI application entry-point (docs/CONTRACTS.md §2).
 
-  GET  /health, /ready, /metrics             ops
-  POST /forecast                             run a forecast cycle (REQ-D, REQ-E)
+  GET  /health, /ready, /metrics             ops (unauthenticated)
+  POST /forecast                             run a forecast cycle (REQ-021, REQ-025)
   GET  /alerts, /alerts/{alert_id}           predictive alerts
   GET  /alerts/summary                       live counts + minutes to the soonest breach
   POST /alerts/{alert_id}/ack|resolve        status transitions
+  GET  /predictions                          latest prediction per component/metric (REQ-023)
+  GET  /predictions/history                  versioned prediction log (REQ-024)
   GET  /thresholds                           effective thresholds
-  PUT  /thresholds/{component_id}            runtime override (REQ-F)
+  PUT  /thresholds/{component_id}            runtime override (REQ-052)
+
+REQ-046: every route below "ops" requires a valid OAuth 2.0 bearer token
+when ``OAUTH2_ENABLED=true`` (app/auth.py).
 """
 
 from __future__ import annotations
@@ -20,10 +25,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from app.alerts import AlertStatus, InvalidTransitionError
+from app.auth import Claims
 from app.components import UnknownComponentError, UnknownMetricError
 from app.config import Settings, get_settings
 from app.forecasting_engine import ForecastCycleError, ForecastingEngine
@@ -45,7 +52,7 @@ class ForecastResponse(BaseModel):
 
 
 async def _forecast_loop(engine: ForecastingEngine, interval: float) -> None:
-    """REQ-D: forecast every configured component every FORECAST_INTERVAL_SECONDS."""
+    """REQ-022: forecast every configured component every FORECAST_INTERVAL_SECONDS."""
     while True:
         try:
             await asyncio.to_thread(engine.run_all)
@@ -80,10 +87,11 @@ def create_app(
 
     app = FastAPI(
         title="Forecasting Service",
-        description="Metric forecasting and predictive alerting (REQ-D, REQ-E, REQ-F)",
+        description="Predictive analytics and time-series forecasting (REQ-021 to REQ-025)",
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings
     app.add_middleware(PrometheusMiddleware)
 
     def _engine(request: Request) -> ForecastingEngine:
@@ -93,6 +101,11 @@ def create_app(
         return eng
 
     # ── ops ────────────────────────────────────────────────────────────────
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        """The bare service URL opens the interactive API docs."""
+        return RedirectResponse("/docs")
 
     @app.get("/health", tags=["ops"])
     def health() -> dict[str, str]:
@@ -111,7 +124,9 @@ def create_app(
     # ── forecasting ────────────────────────────────────────────────────────
 
     @app.post("/forecast", response_model=ForecastResponse, tags=["forecasting"])
-    def forecast(body: ForecastRequest, request: Request) -> dict[str, Any]:
+    def forecast(
+        body: ForecastRequest, request: Request, claims: Claims
+    ) -> dict[str, Any]:
         eng = _engine(request)
         try:
             return eng.run_cycle(body.component_id, body.forecast_window_minutes)
@@ -125,6 +140,7 @@ def create_app(
     @app.get("/alerts", tags=["alerts"])
     def list_alerts(
         request: Request,
+        claims: Claims,
         status_: AlertStatus | None = Query(default=None, alias="status"),
         component_id: str | None = None,
         limit: int = Query(default=100, ge=1, le=1000),
@@ -133,8 +149,8 @@ def create_app(
         return [a.to_dict() for a in alerts]
 
     @app.get("/alerts/summary", tags=["alerts"])
-    def alerts_summary(request: Request) -> dict[str, Any]:
-        """Live view of active (open + acknowledged) alerts for the REQ-K dashboard.
+    def alerts_summary(request: Request, claims: Claims) -> dict[str, Any]:
+        """Live view of active (open + acknowledged) alerts for the REQ-034 dashboard.
 
         ``min_minutes_to_breach`` is computed now from ``predicted_breach_time``
         (negative = predicted breach time has passed), unlike the alert's
@@ -164,7 +180,7 @@ def create_app(
         }
 
     @app.get("/alerts/{alert_id}", tags=["alerts"])
-    def get_alert(alert_id: str, request: Request) -> dict[str, Any]:
+    def get_alert(alert_id: str, request: Request, claims: Claims) -> dict[str, Any]:
         alert = _engine(request).alerts.get(alert_id)
         if alert is None:
             raise HTTPException(404, f"alert {alert_id} not found")
@@ -180,23 +196,47 @@ def create_app(
         return alert.to_dict()
 
     @app.post("/alerts/{alert_id}/ack", tags=["alerts"])
-    def ack_alert(alert_id: str, request: Request) -> dict[str, Any]:
+    def ack_alert(alert_id: str, request: Request, claims: Claims) -> dict[str, Any]:
         return _transition(request, alert_id, AlertStatus.ACKNOWLEDGED)
 
     @app.post("/alerts/{alert_id}/resolve", tags=["alerts"])
-    def resolve_alert(alert_id: str, request: Request) -> dict[str, Any]:
+    def resolve_alert(alert_id: str, request: Request, claims: Claims) -> dict[str, Any]:
         return _transition(request, alert_id, AlertStatus.RESOLVED)
 
-    # ── thresholds (REQ-F) ─────────────────────────────────────────────────
+    # ── predictions (REQ-023, REQ-024) ────────────────────────────────────
+
+    @app.get("/predictions", tags=["predictions"])
+    def latest_predictions(
+        request: Request,
+        claims: Claims,
+        component_id: str | None = None,
+        metric_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Most recent forecast per (component, metric), with confidence flags (REQ-025)."""
+        return _engine(request).predictions.latest(component_id, metric_name)
+
+    @app.get("/predictions/history", tags=["predictions"])
+    def prediction_history(
+        request: Request,
+        claims: Claims,
+        component_id: str | None = None,
+        model_version: str | None = None,
+        limit: int = Query(default=100, ge=1, le=5000),
+    ) -> list[dict[str, Any]]:
+        """Stored predictions, newest first, filterable by model version (REQ-024)."""
+        return _engine(request).predictions.history(component_id, model_version, limit)
+
+    # ── thresholds (REQ-052) ──────────────────────────────────────────────
 
     @app.get("/thresholds", tags=["thresholds"])
-    def get_thresholds(request: Request) -> dict[str, dict[str, float]]:
+    def get_thresholds(request: Request, claims: Claims) -> dict[str, dict[str, float]]:
         return _engine(request).config.thresholds()
 
     @app.put("/thresholds/{component_id}", tags=["thresholds"])
     def put_thresholds(
         component_id: str,
         request: Request,
+        claims: Claims,
         body: dict[str, float] = Body(...),
     ) -> dict[str, float]:
         if not body:
