@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+aws_region   = "ap-south-1"
+environment  = "dev"
+cluster_name = "ai-event-processor"
+
+# Your VPC and >= 2 subnets in different AZs (private subnets with NAT for nodes).
+vpc_id     = "vpc-xxxxxxxxxxxxxxxxx"
+subnet_ids = ["subnet-aaaaaaaaaaaaaaaaa", "subnet-bbbbbbbbbbbbbbbbb"]
+
+# Already created the archive bucket yourself? Point Terraform at it:
+# create_archive_bucket = false
+# archive_bucket_name   = "my-existing-event-archive"
