@@ -25,14 +25,21 @@ from tests.conftest import ALERT_ID, CONTRACTS, VALID_LLM_JSON
 
 SEED = resolve_path("data/dependency_graph.json")
 ALL_IDS = {
-    "ingestion-service",
-    "forecasting-service",
-    "diagnostic-service",
+    "checkout-api",
+    "payments-api",
+    "auth-service",
+    "inventory-api",
     "kafka",
     "zookeeper",
+    "ingestion-service",
+    "diagnostic-service",
+    "forecasting-service",
+    "event-archiver",
+    "s3-archive",
+    "neo4j",
+    "ollama",
     "prometheus",
-    "graph-db",
-    "llm",
+    "grafana",
 }
 
 
@@ -68,14 +75,19 @@ def test_two_hop_traversal_both_directions() -> None:
     assert deps["prometheus"]["direction"] == "upstream" and deps["prometheus"]["depth"] == 1
     assert deps["forecasting-service"]["depth"] == 2
     assert "ingestion-service" not in deps
-    # 3 hops away (forecasting → diagnostic → llm is 2 from forecasting, 4 from ingestion)
-    assert "llm" not in deps and "graph-db" not in deps
+    # GraphRAG's own backends are 3+ hops from ingestion
+    assert "ollama" not in deps and "neo4j" not in deps
 
 
 def test_traversal_from_forecasting() -> None:
     deps = {d["node_id"]: d for d in _client().get_dependencies("forecasting-service")}
-    assert {k for k, v in deps.items() if v["depth"] == 1} == {"prometheus", "diagnostic-service"}
-    assert deps["llm"]["depth"] == 2 and deps["llm"]["edge_type"] == "calls"
+    assert {k for k, v in deps.items() if v["depth"] == 1} == {
+        "prometheus",
+        "diagnostic-service",
+        "grafana",
+    }
+    assert deps["ollama"]["depth"] == 2 and deps["ollama"]["edge_type"] == "calls"
+    assert deps["neo4j"]["via"] == "diagnostic-service"
     assert all(d["depth"] in (1, 2) for d in deps.values())
 
 
@@ -194,7 +206,7 @@ def test_playbook_persistence_round_trip(tmp_path: Path) -> None:
     assert again is not None and again.to_dict() == pb.to_dict()
     assert reloaded.find_by_alert(ALERT_ID) is not None
     assert reloaded.list(component_id="kafka")[0].playbook_id == pb.playbook_id
-    assert reloaded.list(component_id="llm") == []
+    assert reloaded.list(component_id="ollama") == []
 
     schema_path = CONTRACTS / "incident-playbook.schema.json"
     jsonschema = pytest.importorskip("jsonschema")
@@ -284,11 +296,11 @@ def test_fallback_prioritises_unhealthy_dependency() -> None:
 def test_fallback_without_anomalies_still_three_steps() -> None:
     c = _client()
     ctx = {
-        "component": c.get_node("llm"),
-        "dependencies": c.get_dependencies("llm"),
+        "component": c.get_node("ollama"),
+        "dependencies": c.get_dependencies("ollama"),
         "anomalies": [],
     }
-    out = build_fallback("llm", ctx)
+    out = build_fallback("ollama", ctx)
     assert len(out["steps"]) >= 3
 
 
