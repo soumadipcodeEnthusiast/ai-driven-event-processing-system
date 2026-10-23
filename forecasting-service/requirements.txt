@@ -8,3 +8,5 @@ prometheus-client==0.20.*
 pydantic==2.7.*
 pydantic-settings==2.2.*
 PyYAML==6.0.*
+# REQ-046: OAuth 2.0 bearer-token (JWT/JWKS) validation.
+PyJWT[crypto]==2.8.*

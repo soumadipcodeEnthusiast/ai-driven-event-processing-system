@@ -1,5 +1,10 @@
 """
-components.py — monitored-component configuration with hot reload (REQ-F).
+components.py — monitored-component configuration with hot reload.
+
+Runtime-adjustable thresholds without redeploy; closest SRS v1.0 fit is
+REQ-052 (Administration and Configuration Management: "dynamic configuration
+updates for detection thresholds") rather than anything in §4.5 Predictive
+Analytics, which has no threshold-configuration requirement of its own.
 
 The YAML file at ``COMPONENTS_CONFIG`` defines, per component, the PromQL
 query and breach threshold of each metric. The file is re-read whenever its
@@ -157,7 +162,7 @@ class ComponentConfigStore:
             for cid, comp in self.components(include_disabled=True).items()
         }
 
-    # ── write API (REQ-F) ──────────────────────────────────────────────────
+    # ── write API (REQ-052) ────────────────────────────────────────────────
 
     def set_thresholds(self, component_id: str, values: dict[str, float]) -> dict[str, float]:
         """Apply runtime threshold overrides; returns the effective thresholds."""

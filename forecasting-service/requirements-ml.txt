@@ -1,7 +1,10 @@
-# ─── forecasting-service/requirements-ml.txt — TFT forecaster + training ─────
-# Installed on top of requirements.txt when the image is built with INSTALL_ML=true.
-# CPU wheels: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-ml.txt
+# ─── forecasting-service/requirements-ml.txt — TFT forecaster + model training ──
+# Installed on top of requirements.txt when the image is built with INSTALL_ML=true
+# (the compose default). CPU-only PyTorch wheels; no CUDA.
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.3.*
 lightning==2.3.*
 pytorch-forecasting==1.1.*
 pandas==2.2.*
+# ar-ridge model (training/train_forecast_model.py)
+scikit-learn==1.5.*
