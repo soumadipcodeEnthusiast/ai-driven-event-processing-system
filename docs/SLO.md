@@ -1,8 +1,8 @@
 # Service Level Objectives
 
-Owner: SRE. Implementation: `infra/prometheus/rules/slo-recording.yml` (SLIs, budgets),
+Owner: DevOps Engineer (SRS v1.0 §2.3; no separate SRE role). Implementation: `infra/prometheus/rules/slo-recording.yml` (SLIs, budgets),
 `infra/prometheus/rules/slo-burn-alerts.yml` (burn-rate alerts), Grafana dashboard
-**AIOps SLOs & Error Budgets** (`http://localhost:3000/d/aiops-slo`).
+**AIOps SLOs & Error Budgets** (`http://localhost:9030/d/aiops-slo`).
 All metric names come from [CONTRACTS.md §7](CONTRACTS.md#7-prometheus-metrics-names-are-fixed--dashboards-and-alert-rules-depend-on-them).
 
 Every SLO uses a **rolling 30-day window**. SLIs are ratios of good events to total
@@ -12,25 +12,28 @@ events, so they are request-weighted and cheap to compute.
 
 | SLO id (`slo` label) | Requirement | SLI (good / total) | Objective | Budget (30d) |
 |---|---|---|---|---|
-| `ingestion-availability` | REQ-A, REQ-B | events with `outcome != "error"` / all `ingestion_events_total` | **99.9 %** | 0.1 % of events |
-| `ingestion-latency` | REQ-A | `ingestion_processing_seconds_bucket{le="0.5"}` / `ingestion_processing_seconds_count` | **99 %** < 500 ms | 1 % of events |
-| `forecast-availability` | REQ-D, REQ-E | `forecast_runs_total{outcome="ok"}` / all runs | **99 %** | 1 % of runs |
-| `forecast-latency` | REQ-D | `forecast_latency_seconds_bucket{le="2.0"}` / `_count` | **99 %** < 2 s | 1 % of runs |
-| `diagnosis-availability` | REQ-H, REQ-I | `diagnoses_total{outcome=~"ok\|fallback"}` / all diagnoses | **99 %** | 1 % of diagnoses |
-| `graph-context-latency` | REQ-G | `graph_context_seconds_bucket{le="1.0"}` / `_count` | **99 %** < 1 s | 1 % of lookups |
+| `ingestion-availability` | REQ-001, REQ-005 | events with `outcome != "error"` / all `ingestion_events_total` | **99.9 %** | 0.1 % of events |
+| `ingestion-latency` | REQ-004 | `ingestion_processing_seconds_bucket{le="0.5"}` / `ingestion_processing_seconds_count` | **99 %** < 500 ms | 1 % of events |
+| `forecast-availability` | REQ-021, REQ-025 | `forecast_runs_total{outcome="ok"}` / all runs | **99 %** | 1 % of runs |
+| `forecast-latency` | REQ-021 | `forecast_latency_seconds_bucket{le="2.0"}` / `_count` | **99 %** < 2 s | 1 % of runs |
 | `service-availability` | all | `avg_over_time(up{job=~"ingestion-service\|forecasting-service\|diagnostic-service"}[30d])` | **99.5 %** | ~3.6 h down / 30d |
+
+There is no diagnosis-availability / graph-context-latency SLO any more
+(docs/adr/0008 — those metrics, `diagnoses_total` and
+`graph_context_seconds`, are retired along with the GraphRAG/LLM/playbook
+design). diagnostic-service's anomaly-detection metrics and event-archiver's
+`archive_*` metrics have **no SLO yet**: objectives should be set from a few
+weeks of real traffic, not guessed. Until then they are protected by
+threshold alerts (`AnomalyAuditPublishFailing`, `EventArchiveUploadFailing`,
+`EventArchiveStalled`) — see the table below.
 
 Why these choices:
 
-- **Invalid events count as good for ingestion availability.** REQ-B says malformed
+- **Invalid events count as good for ingestion availability.** REQ-005 says malformed
   events must be *rejected* to the DLT; doing that correctly is success. Only
   `outcome="error"` (unexpected failure after 3 retries) burns budget. A high
   invalid ratio is a *producer* problem and has its own alert
   (`IngestionInvalidRatioHigh`).
-- **Fallback playbooks count as good for diagnosis availability.** CONTRACTS §5:
-  the system must always produce a playbook. A fallback still has ≥ 3 ranked steps
-  (REQ-H); it is a quality degradation, watched by `DiagnosticFallbackRatioHigh`,
-  not an outage.
 - Latency SLOs use **histogram-bucket ratios** rather than percentiles so they can be
   aggregated and budgeted. The thresholds are the REQ acceptance criteria.
 
@@ -38,11 +41,12 @@ Why these choices:
 
 | Requirement | How it is measured |
 |---|---|
-| REQ-A "lag < 500 ms at 10 000 ev/s" | Records lag is the metric available (`kafka_consumer_fetch_manager_records_lag_max`). At 10 000 ev/s, 500 ms = **5 000 records**. `IngestionConsumerLagHigh` pages at > 5 000 for 5 min and warns at > 1 000 for 15 min. Processing time is covered by the `ingestion-latency` SLO. |
-| REQ-B rejection correctness | Functional (unit/integration tests). Operationally: invalid ratio (`service:ingestion_events_invalid:ratio_rate10m`) and DLT throughput on the Service Health dashboard. |
-| REQ-E alert lead time ≥ 10 min | Every predicted breach raises an alert carrying its real lead time (0 if the metric is already breaching), so late warnings are visible rather than suppressed. Each alert's `lead_time_minutes` records the warning it gave; a value below 10 means the forecaster saw that breach too late. The AIOps Overview **Time to next predicted breach** panel (live, from `/alerts/summary`) turns red below 10 min. `ForecastLoopStalled` and `forecast-availability` protect the precondition that forecasts run at all. |
-| REQ-H playbook has ≥ 3 steps | Enforced by the contract and tests. The overview dashboard shows the ranked steps of any selected playbook. |
-| REQ-K alert visible within 5 s | The overview dashboard refreshes every **5 s** and reads `/alerts` directly (no intermediate store), so worst-case display latency = 5 s + one HTTP round-trip. Grafana availability is watched by `GrafanaDown`. |
+| REQ-001/004 "lag < 500 ms at 10 000 ev/s" | Records lag is the metric available (`kafka_consumer_fetch_manager_records_lag_max`). At 10 000 ev/s, 500 ms = **5 000 records**. `IngestionConsumerLagHigh` pages at > 5 000 for 5 min and warns at > 1 000 for 15 min. Processing time is covered by the `ingestion-latency` SLO. |
+| REQ-005 rejection correctness | Functional (unit/integration tests). Operationally: invalid ratio (`service:ingestion_events_invalid:ratio_rate10m`) and DLT throughput on the Service Health dashboard. |
+| REQ-025 alert lead time ≥ 10 min | Every predicted breach raises an alert carrying its real lead time (0 if the metric is already breaching), so late warnings are visible rather than suppressed. Each alert's `lead_time_minutes` records the warning it gave; a value below 10 means the forecaster saw that breach too late. `ForecastLoopStalled` and `forecast-availability` protect the precondition that forecasts run at all. |
+| REQ-034 dashboard shows real-time throughput/error rates | The Service Health dashboard reads Prometheus directly (no intermediate store). Grafana availability is watched by `GrafanaDown`. |
+| REQ-016 to REQ-020 | Every event scored: `anomaly_events_scored_total{source="kafka"}` tracks `ingestion_events_total{outcome="valid"}` (Service Health → Events scored). Audit completeness: `AnomalyAuditPublishFailing`. Functional behaviour: diagnostic-service tests. |
+| REQ-028 to REQ-030 archival | `archive_records_total` per topic vs. ingestion throughput; `EventArchiveUploadFailing` (warning) and `EventArchiveStalled` (critical, no upload for 15 min while events flow). |
 
 ## 2. Error budgets
 
@@ -73,10 +77,9 @@ Applied to `ingestion-availability`, `ingestion-latency`, `forecast-availability
 `forecast-latency` (alerts `IngestionErrorBudgetBurn`, `IngestionLatencyBudgetBurn`,
 `ForecastErrorBudgetBurn`, `ForecastLatencyBudgetBurn`).
 
-The diagnostic SLOs are **low-traffic** (one diagnosis per predictive alert), where
-burn-rate alerts are noisy. They use threshold alerts with a minimum-volume guard
-instead (`DiagnosisErrorRateHigh`, `GraphContextLatencyHigh`) and their budget is
-tracked on the dashboard only.
+(`DiagnosisErrorRateHigh` and `GraphContextLatencyHigh` are retired along
+with the GraphRAG/LLM/playbook design — docs/adr/0008. No anomaly-detection
+alert replaces them yet; see the gap noted in §1.)
 
 ## 4. Error-budget policy
 
@@ -84,7 +87,7 @@ tracked on the dashboard only.
 |---|---|
 | > 50 % | Ship normally. Chaos experiments and risky migrations allowed. |
 | 25 – 50 % | Ship normally; every change needs a rollback plan. Review top burn contributors weekly. |
-| 0 – 25 % | Only low-risk changes and reliability fixes. No model (TFT) promotions without canary. |
+| 0 – 25 % | Only low-risk changes and reliability fixes. No ML model promotions without canary. |
 | < 0 (breached) | **Feature freeze** for the owning service until the budget is positive; a postmortem is written; the top action item is prioritised over roadmap work. |
 
 Exceptions: security fixes always ship. Budget burned by a dependency outside our
@@ -105,5 +108,4 @@ SLO threshold:
 |---|---|---|
 | `ingestion_processing_seconds` | `le="0.5"` | Micrometer: `management.metrics.distribution.slo.ingestion.processing=500ms` (percentile-histogram buckets alone do not contain 0.5). |
 | `forecast_latency_seconds` | `le="2.0"` (or `2`) | prometheus_client default buckets do **not** include 2 — set `buckets=(…, 1.0, 2.0, 5.0, …)`. |
-| `graph_context_seconds` | `le="1.0"` (or `1`) | default buckets are fine. |
-| `diagnosis_latency_seconds`, `llm_request_seconds` | any, ideally up to 60 s | p95 is computed with `histogram_quantile`; add 15, 30, 60 s buckets for LLM calls. |
+| `anomaly_scoring_latency_seconds` | none defined yet | No SLO exists for this metric yet — see the gap noted in §1. |
