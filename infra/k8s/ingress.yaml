@@ -1,0 +1,45 @@
+---
+# ─── Ingress: TLS termination (REQ-047) ───────────────────────────────────────
+# Exposes the forecasting and diagnostic APIs over HTTPS through an AWS
+# Application Load Balancer (requires the AWS Load Balancer Controller in the
+# cluster). TLS 1.2+ is enforced by the ALB security policy; traffic inside
+# the cluster stays on the private VPC network. Set certificate-arn to your
+# ACM certificate and the host to your domain before applying.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: event-processor-api
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/part-of: ai-driven-event-processor
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:ap-south-1:000000000000:certificate/CHANGE-ME"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+spec:
+  ingressClassName: alb
+  # Host-based routing: the ALB doesn't rewrite paths, and the services serve at "/".
+  rules:
+    - host: forecasting.event-processor.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: forecasting-service
+                port:
+                  name: http
+    - host: diagnostic.event-processor.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: diagnostic-service
+                port:
+                  name: http

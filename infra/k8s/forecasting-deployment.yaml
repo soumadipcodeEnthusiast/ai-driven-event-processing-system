@@ -18,9 +18,15 @@ data:
   FORECAST_INTERVAL_SECONDS: "60"
   ALERT_MIN_LEAD_MINUTES: "10"
   COMPONENTS_CONFIG: "/app/config/components.yaml"
-  DIAGNOSTIC_URL: "http://diagnostic-service:8082"
   FORECASTER: "auto"
-  TFT_MODEL_VERSION: "0.0.0-stub"
+  # Mount a trained model here (training/train_forecast_model.py); absent → statistical.
+  ML_MODEL_PATH: "/models/forecast_model.json"
+  ML_MODEL_VERSION: ""
+  PREDICTIONS_PATH: "/tmp/predictions.jsonl"
+  OAUTH2_ENABLED: "false"
+  OAUTH2_JWKS_URL: ""
+  OAUTH2_ISSUER: ""
+  OAUTH2_AUDIENCE: ""
   HOME: "/tmp"
 
 ---
@@ -81,7 +87,7 @@ spec:
               memory: "256Mi"
             limits:
               cpu: "1000m"
-              # Raise to >= 2Gi for images built with INSTALL_ML=true (TFT/torch).
+              # Raise to >= 2Gi for images built with INSTALL_ML=true (tensorflow/scikit-learn).
               memory: "1Gi"
           securityContext:
             allowPrivilegeEscalation: false

@@ -1,11 +1,9 @@
 ---
 # ─── ConfigMap ────────────────────────────────────────────────────────────────
-# Env vars per docs/CONTRACTS.md §5. The dependency-graph seed is baked into the
-# image at /app/data/dependency_graph.json (GRAPH_SEED_PATH).
-# Secrets (LLM_API_KEY, GRAPH_DB_PASSWORD) come from the optional Secret
-# `diagnostic-secrets`, e.g.:
-#   kubectl -n event-processor create secret generic diagnostic-secrets \
-#     --from-literal=LLM_API_KEY=... --from-literal=GRAPH_DB_PASSWORD=...
+# Env vars for anomaly detection (REQ-016 to REQ-020). GraphRAG/Neo4j and LLM
+# playbook generation are not in SRS v1.0 scope (docs/adr/0008); this service
+# keeps only in-memory baselines (relearned after a restart), so it carries no
+# PVC and no graph/LLM secrets.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,36 +13,19 @@ metadata:
     app.kubernetes.io/name: diagnostic-service
     app.kubernetes.io/part-of: ai-driven-event-processor
 data:
-  GRAPH_BACKEND: "networkx"
-  GRAPH_SEED_PATH: "/app/data/dependency_graph.json"
-  GRAPH_DB_URL: "bolt://neo4j:7687"
-  GRAPH_DB_USER: "neo4j"
-  # No LLM is deployed by these manifests, so default to rule-based playbooks.
-  # Set to ollama|anthropic|openai (+ LLM_API_URL / LLM_MODEL, and LLM_API_KEY
-  # in the diagnostic-secrets Secret) to enable one; failures fall back to rules.
-  LLM_PROVIDER: "none"
-  LLM_TIMEOUT_SECONDS: "60"
-  PLAYBOOK_STORE_DIR: "/data/playbooks"
+  MODEL_VERSION: "ewma-zscore-1.0"
+  ANOMALY_THRESHOLD: "0.8"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  ANOMALY_AUDIT_TOPIC: "anomaly-audit"
+  # REQ-016: every replica joins this group and scores its share of events.
+  EVENT_CONSUMER_ENABLED: "true"
+  EVENT_INPUT_TOPIC: "normalized-events"
+  # REQ-046: set to "true" with your IdP's JWKS URL (e.g. a Cognito user pool).
+  OAUTH2_ENABLED: "false"
+  OAUTH2_JWKS_URL: ""
+  OAUTH2_ISSUER: ""
+  OAUTH2_AUDIENCE: ""
   HOME: "/tmp"
-
----
-# ─── PersistentVolumeClaim (playbook store) ───────────────────────────────────
-# ReadWriteOnce + single writer (docs/adr/0005-file-based-json-playbook-store.md). Use a
-# ReadWriteMany class or a real store before running more than one replica.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: diagnostic-playbooks
-  namespace: event-processor
-  labels:
-    app.kubernetes.io/name: diagnostic-service
-    app.kubernetes.io/part-of: ai-driven-event-processor
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
 
 ---
 # ─── Deployment ───────────────────────────────────────────────────────────────
@@ -58,12 +39,11 @@ metadata:
     app.kubernetes.io/component: diagnostics
     app.kubernetes.io/part-of: ai-driven-event-processor
 spec:
-  # Single replica by design (docs/adr/0005-file-based-json-playbook-store.md); no HPA.
-  # Recreate guarantees two pods never run concurrently during a rollout.
-  replicas: 1
+  # Stateless (no playbook store); safe to run >1 replica and roll normally.
+  replicas: 2
   revisionHistoryLimit: 5
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app.kubernetes.io/name: diagnostic-service
@@ -98,19 +78,6 @@ spec:
           envFrom:
             - configMapRef:
                 name: diagnostic-config
-          env:
-            - name: LLM_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: diagnostic-secrets
-                  key: LLM_API_KEY
-                  optional: true
-            - name: GRAPH_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: diagnostic-secrets
-                  key: GRAPH_DB_PASSWORD
-                  optional: true
           resources:
             requests:
               cpu: "200m"
@@ -124,8 +91,6 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: playbooks
-              mountPath: /data/playbooks
             - name: tmp
               mountPath: /tmp
           startupProbe:
@@ -149,9 +114,6 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
       volumes:
-        - name: playbooks
-          persistentVolumeClaim:
-            claimName: diagnostic-playbooks
         - name: tmp
           emptyDir: {}
 

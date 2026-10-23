@@ -14,6 +14,8 @@ resources:
   - ingestion-deployment.yaml
   - forecasting-deployment.yaml
   - diagnostic-deployment.yaml
+  - archiver-deployment.yaml
+  - ingress.yaml
   - hpa.yaml
   - prometheus.yaml
 
@@ -24,4 +26,6 @@ images:
   - name: ghcr.io/your-org/forecasting-service
     newTag: latest
   - name: ghcr.io/your-org/diagnostic-service
+    newTag: latest
+  - name: ghcr.io/your-org/event-archiver
     newTag: latest

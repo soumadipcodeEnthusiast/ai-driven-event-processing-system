@@ -22,6 +22,10 @@ data:
   # Expose /actuator/health/{liveness,readiness} even outside auto-detection.
   MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
   JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+  # REQ-046: your IdP's issuer (and/or JWKS URL); unset → all tokens rejected.
+  OAUTH2_ISSUER_URI: ""
+  OAUTH2_JWKS_URL: ""
+  OAUTH2_AUDIENCE: ""
 
 ---
 # ─── Deployment ───────────────────────────────────────────────────────────────

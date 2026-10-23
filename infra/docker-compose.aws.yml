@@ -1,0 +1,35 @@
+# Archive to your real Amazon S3 bucket instead of the local MinIO (REQ-028).
+#
+#   export S3_ARCHIVE_BUCKET=<your-bucket>  S3_ARCHIVE_REGION=ap-south-1
+#   eval "$(aws configure export-credentials --format env)"   # AWS CLI v2; or export keys yourself
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.aws.yml up -d --build
+#
+# The IAM identity needs s3:PutObject on arn:aws:s3:::<bucket>/events/* (and
+# kms:GenerateDataKey if the bucket uses SSE-KMS) — infra/terraform/s3.tf
+# creates exactly this policy for the in-cluster archiver.
+services:
+  event-archiver:
+    environment:
+      S3_ARCHIVE_BUCKET: ${S3_ARCHIVE_BUCKET:?set S3_ARCHIVE_BUCKET to your bucket name}
+      S3_ARCHIVE_REGION: ${S3_ARCHIVE_REGION:-ap-south-1}
+      S3_ARCHIVE_KMS_KEY_ID: ${S3_ARCHIVE_KMS_KEY_ID:-}
+      S3_ENDPOINT_URL: ""   # empty → real AWS S3 endpoint for the region
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?export AWS credentials first}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?export AWS credentials first}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    depends_on: !override
+      kafka-init:
+        condition: service_completed_successfully
+
+  # The console lists the same bucket the archiver writes to.
+  demo-console:
+    environment:
+      S3_ARCHIVE_BUCKET: ${S3_ARCHIVE_BUCKET:?set S3_ARCHIVE_BUCKET to your bucket name}
+      S3_ARCHIVE_REGION: ${S3_ARCHIVE_REGION:-ap-south-1}
+      S3_ENDPOINT_URL: ""
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?export AWS credentials first}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?export AWS credentials first}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    depends_on: !override
+      kafka-init:
+        condition: service_completed_successfully

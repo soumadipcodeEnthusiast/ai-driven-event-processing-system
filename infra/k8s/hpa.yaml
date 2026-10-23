@@ -45,12 +45,50 @@ spec:
           value: 1
           periodSeconds: 120
 
-# ─── No HPA for forecasting-service / diagnostic-service (intentional) ────────
-# Both are pinned to exactly 1 replica (Deployment replicas: 1, Recreate):
-#   - forecasting-service keeps alerts in memory and runs the forecast loop in
-#     every pod; N replicas => duplicate alerts and divergent GET /alerts.
-#     See docs/adr/0007-in-memory-alert-store.md.
-#   - diagnostic-service uses a single-writer file-based playbook store on a
-#     ReadWriteOnce PVC. See docs/adr/0005-file-based-json-playbook-store.md.
-# Re-add autoscalers only after those ADRs are superseded (shared store +
-# leader election for the forecast loop).
+---
+# ─── HorizontalPodAutoscaler — diagnostic-service ─────────────────────────────
+# diagnostic-service is now stateless anomaly scoring (REQ-016 to REQ-020,
+# docs/adr/0008) with no playbook store, so — unlike before — it can scale
+# horizontally like ingestion-service.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: diagnostic-service-hpa
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: diagnostic-service
+    app.kubernetes.io/component: diagnostics
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: diagnostic-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+# ─── No HPA for forecasting-service (intentional) ─────────────────────────────
+# Pinned to exactly 1 replica (Deployment replicas: 1, Recreate): it keeps
+# alerts in memory and runs the forecast loop in every pod, so N replicas
+# would produce duplicate alerts and a divergent GET /alerts.
+# See docs/adr/0007-in-memory-alert-store.md. Re-add an autoscaler only after
+# that ADR is superseded (shared store + leader election for the forecast loop).
