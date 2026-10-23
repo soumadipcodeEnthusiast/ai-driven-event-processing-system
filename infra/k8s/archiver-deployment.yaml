@@ -1,0 +1,132 @@
+---
+# ─── ServiceAccount (IRSA) ────────────────────────────────────────────────────
+# The archiver writes to S3 with the IAM role created by infra/terraform/s3.tf
+# (output `archiver_role_arn`), assumed via IRSA — no static AWS keys in the
+# cluster. Replace the placeholder ARN with that output.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: event-archiver
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: event-archiver
+    app.kubernetes.io/part-of: ai-driven-event-processor
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::000000000000:role/ai-event-processor-archiver"
+
+---
+# ─── ConfigMap ────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: archiver-config
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: event-archiver
+    app.kubernetes.io/part-of: ai-driven-event-processor
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  ARCHIVE_TOPICS: "raw-events,normalized-events"
+  ARCHIVE_BATCH_SIZE: "1000"
+  ARCHIVE_FLUSH_SECONDS: "60"
+  # REQ-028: your archive bucket (terraform output `archive_bucket_name`).
+  S3_ARCHIVE_BUCKET: "CHANGE-ME-event-archive"
+  S3_ARCHIVE_REGION: "ap-south-1"
+  S3_ARCHIVE_PREFIX: "events"
+  METRICS_PORT: "8083"
+
+---
+# ─── Deployment ───────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-archiver
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: event-archiver
+    app.kubernetes.io/component: archival
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  # Consumer group `event-archiver`: scale up to the topics' partition count.
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-archiver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: event-archiver
+        app.kubernetes.io/component: archival
+        app.kubernetes.io/part-of: ai-driven-event-processor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8083"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: event-archiver
+      # IRSA injects a projected web-identity token; the SDK reads it from disk.
+      automountServiceAccountToken: true
+      # Leaves time to flush in-flight batches to S3 on SIGTERM.
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: event-archiver
+          image: ghcr.io/your-org/event-archiver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 8083
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: archiver-config
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+---
+# ─── Service (metrics) ────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-archiver
+  namespace: event-processor
+  labels:
+    app.kubernetes.io/name: event-archiver
+    app.kubernetes.io/component: archival
+    app.kubernetes.io/part-of: ai-driven-event-processor
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: event-archiver
+  ports:
+    - name: metrics
+      port: 8083
+      targetPort: metrics
+      protocol: TCP
