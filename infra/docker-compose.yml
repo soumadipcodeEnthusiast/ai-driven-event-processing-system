@@ -2,12 +2,23 @@
 # Spec: docs/CONTRACTS.md (ports §8, env vars §5).
 #
 #   docker compose -f infra/docker-compose.yml up --build -d
-#   docker compose -f infra/docker-compose.yml --profile llm up -d      # + Ollama (LLM playbooks)
-#   docker compose -f infra/docker-compose.yml --profile neo4j up -d    # + Neo4j (set GRAPH_BACKEND=neo4j)
 #
-# By default (LLM_PROVIDER=none) diagnostic-service builds rule-based playbooks.
-# With the `llm` profile and LLM_PROVIDER=ollama it asks the local model and
-# still falls back to rules if the call fails or the answer is malformed.
+# AI stages (docs/adr/0010):
+#   forecasting-service  Temporal Fusion Transformer (PyTorch, CPU) forecasts
+#                        Prometheus metrics; train it with `make train-tft`.
+#   diagnostic-service   anomaly scoring on every event, then GraphRAG root-cause
+#                        analysis: 2-hop dependency context from Neo4j + a local
+#                        LLM (Ollama, llama3.2:3b) → incident playbooks on the
+#                        `incident-playbooks` topic.
+# The first `up` downloads the LLM (~2 GB) once into the ollama-data volume.
+#
+# Host ports are in the 9000 range (9030 Grafana, 9080-9083 services) so they
+# don't collide with common dev tools on 3000/8080/8081; inside the network the
+# services keep their own ports (8080-8083, 3000). Override with *_HOST_PORT.
+#
+# `minio` stands in for Amazon S3 (REQ-028: archival) in local dev. To archive
+# to your real AWS bucket instead, add the override file:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.aws.yml up -d
 
 name: ai-event-processor
 
@@ -20,9 +31,11 @@ volumes:
   kafka-data:
   prometheus-data:
   grafana-data:
-  playbooks-data:
+  minio-data:
+  forecast-data:
   neo4j-data:
   ollama-data:
+  playbooks-data:
 
 services:
 
@@ -100,6 +113,8 @@ services:
         ensure_topic raw-events 6
         ensure_topic normalized-events 6
         ensure_topic raw-events.DLT 1
+        ensure_topic anomaly-audit 3
+        ensure_topic incident-playbooks 3
         kafka-topics --bootstrap-server "$$BS" --list
         echo 'Topics created successfully.'
     networks:
@@ -131,14 +146,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Grafana (REQ-K dashboard) ──────────────────────────────────────────────
+  # ── Grafana (REQ-034 dashboard) ────────────────────────────────────────────
   grafana:
     image: grafana/grafana:11.6.1
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "${GRAFANA_HOST_PORT:-9030}:3000"
     environment:
-      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       # Local convenience only: read-only anonymous access.
@@ -146,7 +160,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/aiops-overview.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/service-health.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -171,13 +185,16 @@ services:
     image: ai-event-processor/ingestion-service:local
     container_name: ingestion-service
     ports:
-      - "8080:8080"
+      - "${INGESTION_HOST_PORT:-9080}:8080"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_INPUT_TOPIC: raw-events
       KAFKA_OUTPUT_TOPIC: normalized-events
       KAFKA_DLT_TOPIC: raw-events.DLT
       STRICT_VALIDATION: ${STRICT_VALIDATION:-true}
+      OAUTH2_ISSUER_URI: ${OAUTH2_ISSUER_URI:-}
+      OAUTH2_JWKS_URL: ${OAUTH2_JWKS_URL:-}
+      OAUTH2_AUDIENCE: ${OAUTH2_AUDIENCE:-}
       JAVA_OPTS: "-XX:+UseContainerSupport -Xms256m -Xmx512m"
     depends_on:
       kafka:
@@ -195,7 +212,7 @@ services:
       start_period: 60s
     restart: on-failure
 
-  # ── Diagnostic Service (Python FastAPI) ────────────────────────────────────
+  # ── Diagnostic Service (Python FastAPI) — anomaly detection, REQ-016 to REQ-020 ──
   diagnostic-service:
     build:
       context: ../diagnostic-service
@@ -203,29 +220,45 @@ services:
     image: ai-event-processor/diagnostic-service:local
     container_name: diagnostic-service
     ports:
-      - "8082:8082"
+      - "${DIAGNOSTIC_HOST_PORT:-9082}:8082"
     environment:
-      GRAPH_BACKEND: ${GRAPH_BACKEND:-networkx}
-      GRAPH_SEED_PATH: /app/data/dependency_graph.json
+      MODEL_VERSION: ${ANOMALY_MODEL_VERSION:-ewma-zscore-1.0}
+      ANOMALY_THRESHOLD: ${ANOMALY_THRESHOLD:-0.8}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      ANOMALY_AUDIT_TOPIC: anomaly-audit
+      # REQ-016: score every event on normalized-events, not only POST /score.
+      EVENT_CONSUMER_ENABLED: "true"
+      EVENT_INPUT_TOPIC: normalized-events
+      # GraphRAG root-cause analysis (docs/adr/0010)
+      GRAPH_BACKEND: neo4j
       GRAPH_DB_URL: bolt://neo4j:7687
       GRAPH_DB_USER: neo4j
       GRAPH_DB_PASSWORD: ${GRAPH_DB_PASSWORD:-localdevpassword}
-      # Default `none` = rule-based playbooks. For a local LLM run with
-      # `--profile llm` and LLM_PROVIDER=ollama; any LLM failure falls back to rules.
-      LLM_PROVIDER: ${LLM_PROVIDER:-none}   # set to ollama (with --profile llm), anthropic or openai
-      LLM_API_URL: ${LLM_API_URL:-}         # empty = provider default
-      LLM_MODEL: ${LLM_MODEL:-}             # empty = provider default (ollama: llama3.1)
+      GRAPH_SEED_PATH: /app/data/dependency_graph.json
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}   # ollama | anthropic | openai | none (rule-based)
+      LLM_API_URL: ${LLM_API_URL:-}           # empty = provider default (ollama: http://ollama:11434)
+      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}   # CPU-only 3B model: 1-4 min per playbook
       PLAYBOOK_STORE_DIR: /data/playbooks
-    depends_on:
-      # Only enforced when the `neo4j` profile is active; the graph client
-      # checks connectivity once at startup, so it must not race Neo4j.
-      neo4j:
-        condition: service_healthy
-        required: false
+      INCIDENT_AUTO_DIAGNOSE: ${INCIDENT_AUTO_DIAGNOSE:-true}
+      INCIDENT_COOLDOWN_SECONDS: ${INCIDENT_COOLDOWN_SECONDS:-600}
+      INCIDENT_PLAYBOOK_TOPIC: incident-playbooks
+      OAUTH2_ENABLED: ${OAUTH2_ENABLED:-false}
+      OAUTH2_JWKS_URL: ${OAUTH2_JWKS_URL:-}
+      OAUTH2_ISSUER: ${OAUTH2_ISSUER_URI:-}
+      OAUTH2_AUDIENCE: ${OAUTH2_AUDIENCE:-}
     volumes:
       - playbooks-data:/data/playbooks
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      # The graph client connects once at startup (and falls back to the seed
+      # graph if it can't), so it must not race Neo4j.
+      neo4j:
+        condition: service_healthy
     networks:
       - event-net
     healthcheck:
@@ -242,27 +275,39 @@ services:
       context: ../forecasting-service
       dockerfile: Dockerfile
       args:
-        INSTALL_ML: ${INSTALL_ML:-false}
+        INSTALL_ML: ${INSTALL_ML:-true}   # PyTorch + pytorch-forecasting for the TFT
     image: ai-event-processor/forecasting-service:local
     container_name: forecasting-service
     ports:
-      - "8081:8081"
+      - "${FORECASTING_HOST_PORT:-9081}:8081"
     environment:
       PROMETHEUS_URL: http://prometheus:9090
       FORECAST_WINDOW_MINUTES: "60"
       FORECAST_INTERVAL_SECONDS: ${FORECAST_INTERVAL_SECONDS:-60}
       ALERT_MIN_LEAD_MINUTES: ${ALERT_MIN_LEAD_MINUTES:-10}
       COMPONENTS_CONFIG: /app/config/components.yaml
-      DIAGNOSTIC_URL: http://diagnostic-service:8082
       FORECASTER: ${FORECASTER:-auto}
-      TFT_MODEL_VERSION: ${TFT_MODEL_VERSION:-0.0.0-stub}
+      ML_MODEL_PATH: /models/forecast_model.json
+      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-}
+      # Temporal Fusion Transformer (make train-tft writes it); FORECASTER=auto uses it when present.
+      TFT_MODEL_PATH: /models/tft.ckpt
+      TFT_MODEL_VERSION: ${TFT_MODEL_VERSION:-}
+      # New predictive alerts → GraphRAG playbook (docs/adr/0010)
+      DIAGNOSTIC_URL: http://diagnostic-service:8082
+      PREDICTIONS_PATH: /data/predictions.jsonl
+      OAUTH2_ENABLED: ${OAUTH2_ENABLED:-false}
+      OAUTH2_JWKS_URL: ${OAUTH2_JWKS_URL:-}
+      OAUTH2_ISSUER: ${OAUTH2_ISSUER_URI:-}
+      OAUTH2_AUDIENCE: ${OAUTH2_AUDIENCE:-}
     volumes:
       # Bind-mounted so threshold/component edits hot-reload (mtime) without a rebuild.
       - ../forecasting-service/config:/app/config:ro
+      # Trained models: tft.ckpt (training/train_tft.py) and forecast_model.json
+      # (training/train_forecast_model.py); absent → statistical forecaster.
+      - ../forecasting-service/models:/models:ro
+      - forecast-data:/data
     depends_on:
       prometheus:
-        condition: service_healthy
-      diagnostic-service:
         condition: service_healthy
     networks:
       - event-net
@@ -274,36 +319,43 @@ services:
       start_period: 20s
     restart: on-failure
 
-  # ── Optional: Neo4j graph backend (profile `neo4j`) ────────────────────────
-  # Use with GRAPH_BACKEND=neo4j. Bolt 7687, browser 7474.
+  # ── Neo4j: service dependency graph for GraphRAG (docs/adr/0010) ─────────
+  # diagnostic-service seeds an empty database from diagnostic-service/data/
+  # dependency_graph.json. Browser: http://localhost:9074 (neo4j / localdevpassword).
   neo4j:
     image: neo4j:5.26-community
     container_name: neo4j
-    profiles: ["neo4j"]
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "${NEO4J_HTTP_HOST_PORT:-9074}:7474"
+      - "${NEO4J_BOLT_HOST_PORT:-9687}:7687"
     environment:
       NEO4J_AUTH: neo4j/${GRAPH_DB_PASSWORD:-localdevpassword}
       NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+      # The browser runs on the host, so it must dial the host port.
+      NEO4J_server_bolt_advertised__address: localhost:${NEO4J_BOLT_HOST_PORT:-9687}
     volumes:
       - neo4j-data:/data
     networks:
       - event-net
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' >/dev/null"]
+      # A port check, not cypher-shell: that starts a JVM on every probe and
+      # kept Neo4j at ~200% CPU, starving the local LLM.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/7687' && bash -c 'echo > /dev/tcp/127.0.0.1/7474'"]
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 30s
 
-  # ── Optional: Ollama local LLM (profile `llm`) ─────────────────────────────
+  # ── Ollama: local LLM that writes GraphRAG playbooks ───────────────────────
   ollama:
     image: ollama/ollama:0.35.1
     container_name: ollama
-    profiles: ["llm"]
     ports:
-      - "11434:11434"
+      - "${OLLAMA_HOST_PORT:-9434}:11434"
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m        # keep the model loaded between diagnoses
+      OLLAMA_NUM_PARALLEL: "1"
     volumes:
       - ollama-data:/root/.ollama
     networks:
@@ -315,17 +367,125 @@ services:
       retries: 10
       start_period: 10s
 
-  # One-shot: pull the model into the ollama volume, then exit.
+  # One-shot: download the model into the ollama volume (first run only), then exit.
   ollama-pull:
     image: ollama/ollama:0.35.1
     container_name: ollama-pull
-    profiles: ["llm"]
     depends_on:
       ollama:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["ollama", "pull", "${LLM_MODEL:-llama3.1}"]
+    entrypoint: ["ollama", "pull", "${LLM_MODEL:-llama3.2:3b}"]
     networks:
       - event-net
     restart: "no"
+
+  # ── MinIO (local S3 stand-in, REQ-028: archival) ───────────────────────────
+  # The upstream minio/minio and minio/mc images are no longer published on
+  # Docker Hub or Quay, so this uses Bitnami's MinIO build (same server; it
+  # also ships the `mc` client, which minio-init uses).
+  minio:
+    image: bitnamilegacy/minio:2024.7.16
+    container_name: minio
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+      HOME: /tmp   # mc writes its config under $$HOME
+    volumes:
+      - minio-data:/bitnami/minio/data
+    networks:
+      - event-net
+    healthcheck:
+      test: ["CMD-SHELL", "MC_HOST_h=http://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@127.0.0.1:9000 mc ready h"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # One-shot: create the archive bucket and its retention rule, then exit.
+  minio-init:
+    image: bitnamilegacy/minio:2024.7.16
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      HOME: /tmp
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "${S3_ACCESS_KEY:-minioadmin}" "${S3_SECRET_KEY:-minioadmin}"
+        mc mb --ignore-existing "local/${S3_BUCKET:-event-archive}"
+        # REQ-029 retention, mirroring infra/terraform/s3.tf's lifecycle rule.
+        mc ilm rule ls "local/${S3_BUCKET:-event-archive}" 2>/dev/null | grep -q Expiration \
+          || mc ilm rule add --expire-days "${ARCHIVE_RETENTION_DAYS:-365}" "local/${S3_BUCKET:-event-archive}"
+    networks:
+      - event-net
+    restart: "no"
+
+  # ── Event archiver (Kafka → S3, REQ-028) ───────────────────────────────────
+  event-archiver:
+    build:
+      context: ../storage
+      dockerfile: Dockerfile
+    image: ai-event-processor/event-archiver:local
+    container_name: event-archiver
+    ports:
+      - "${ARCHIVER_HOST_PORT:-9083}:8083"   # Prometheus metrics
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      ARCHIVE_TOPICS: raw-events,normalized-events
+      ARCHIVE_BATCH_SIZE: ${ARCHIVE_BATCH_SIZE:-1000}
+      ARCHIVE_FLUSH_SECONDS: ${ARCHIVE_FLUSH_SECONDS:-30}
+      S3_ARCHIVE_BUCKET: ${S3_BUCKET:-event-archive}
+      S3_ARCHIVE_REGION: ${S3_ARCHIVE_REGION:-us-east-1}
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-minioadmin}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - event-net
+    restart: on-failure
+
+  # ── Demo console (local only): live pipeline view + guided demo ───────────
+  # http://localhost:9099 — reads Kafka directly and drives the demo through
+  # the services' own APIs. Not part of the production deployment (infra/k8s).
+  demo-console:
+    build:
+      context: ../console
+      dockerfile: Dockerfile
+    image: ai-event-processor/demo-console:local
+    container_name: demo-console
+    ports:
+      - "${CONSOLE_HOST_PORT:-9099}:8099"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      S3_ARCHIVE_BUCKET: ${S3_BUCKET:-event-archive}
+      S3_ARCHIVE_REGION: ${S3_ARCHIVE_REGION:-us-east-1}
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-minioadmin}
+      GRAFANA_HOST_PORT: ${GRAFANA_HOST_PORT:-9030}
+      INGESTION_HOST_PORT: ${INGESTION_HOST_PORT:-9080}
+      FORECASTING_HOST_PORT: ${FORECASTING_HOST_PORT:-9081}
+      DIAGNOSTIC_HOST_PORT: ${DIAGNOSTIC_HOST_PORT:-9082}
+      ARCHIVER_HOST_PORT: ${ARCHIVER_HOST_PORT:-9083}
+      NEO4J_HTTP_HOST_PORT: ${NEO4J_HTTP_HOST_PORT:-9074}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - event-net
+    restart: on-failure
