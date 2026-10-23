@@ -1,7 +1,7 @@
 # ADR-0005: File-based JSON playbook store
 
 ## Status
-Accepted (2026-10-04)
+Superseded by [ADR-0008](0008-rescope-diagnostic-service-to-anomaly-detection.md) (2026-10-11)
 
 ## Context
 REQ-I requires playbooks stored as structured JSON, retrievable by ID and linked to `alert_id`. The scaffold used an in-memory dict, which loses everything on restart. Volume is low: one playbook per alert, at most dozens a day.

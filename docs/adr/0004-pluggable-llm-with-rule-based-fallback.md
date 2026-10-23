@@ -1,7 +1,7 @@
 # ADR-0004: Pluggable LLM provider with a rule-based fallback
 
 ## Status
-Accepted (2026-10-04)
+Superseded by [ADR-0008](0008-rescope-diagnostic-service-to-anomaly-detection.md) (2026-10-11)
 
 ## Context
 REQ-H needs a playbook with ≥ 3 ranked steps. Which LLM to use (GPT-4o vs. self-hosted Llama 3) was an open question. LLMs are slow, can be unavailable, cost money, and sometimes return malformed JSON. Tests must run without an LLM (CONTRACTS.md §6). The system should *always* produce a playbook.

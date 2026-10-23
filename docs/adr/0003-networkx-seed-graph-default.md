@@ -1,7 +1,7 @@
 # ADR-0003: networkx seed graph by default, Neo4j optional
 
 ## Status
-Accepted (2026-10-04)
+Superseded by [ADR-0008](0008-rescope-diagnostic-service-to-anomaly-detection.md) (2026-10-11)
 
 ## Context
 REQ-G requires 2-hop dependency context in < 1 s for graphs of up to 500 nodes. The scaffold pointed at `bolt://neo4j:7687`, but compose had no Neo4j service. The platform has 8 components (CONTRACTS.md §4). The open question was Neo4j vs. AWS Neptune.

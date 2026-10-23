@@ -1,7 +1,8 @@
 # ADR-0001: Synchronous HTTP hand-off from forecasting to diagnostic
 
 ## Status
-Accepted (2026-10-04)
+Superseded by [ADR-0008](0008-rescope-diagnostic-service-to-anomaly-detection.md) (2026-10-11) —
+diagnostic-service no longer generates playbooks, so there is nothing to hand off to.
 
 ## Context
 When forecasting-service raises a `PredictiveAlert`, diagnostic-service has to produce a playbook for the at-risk component. The scaffold never defined the trigger (README "Known gaps"). The two candidates were:
