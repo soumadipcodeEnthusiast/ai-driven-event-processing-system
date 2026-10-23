@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventproc.local/contracts/anomaly-audit.schema.json",
+  "title": "AnomalyAuditRecord",
+  "description": "Record published by diagnostic-service to Kafka topic `anomaly-audit`, keyed by `event_id`, for every event whose anomaly score exceeded the threshold (REQ-019, docs/CONTRACTS.md §1.3).",
+  "type": "object",
+  "required": ["audit_id", "event_id", "score", "threshold", "model_version", "detected_at", "schema_version"],
+  "properties": {
+    "audit_id": { "type": "string", "format": "uuid" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "component_id": { "type": ["string", "null"] },
+    "source": { "type": ["string", "null"] },
+    "type": { "type": ["string", "null"] },
+    "event_timestamp": { "type": ["string", "null"], "description": "The scored event's own `timestamp`, as received." },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "threshold": { "type": "number", "minimum": 0, "maximum": 1, "description": "Threshold in force when the anomaly triggered." },
+    "model_version": { "type": "string" },
+    "reason": { "type": ["string", "null"], "description": "Payload field with the largest deviation, or `type` for a rare event type." },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "schema_version": { "type": "string", "const": "1.0" }
+  },
+  "additionalProperties": false
+}
