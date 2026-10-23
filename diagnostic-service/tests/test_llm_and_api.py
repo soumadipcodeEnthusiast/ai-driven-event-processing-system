@@ -122,7 +122,7 @@ def test_build_prompt_contains_context(make_engine: Callable[..., DiagnosticEngi
     assert "| kafka | broker | healthy | consumes_from | downstream | 1 |" in prompt
     assert '"metric_name": "cpu_utilisation"' in prompt
     assert "single JSON object" in prompt and '"root_cause_hypothesis"' in prompt
-    assert ctx["node_metadata"]["kafka"]["owner_team"] == "platform-infra"
+    assert ctx["node_metadata"]["kafka"]["owner_team"] == "data-platform"
 
 
 # ─── API ────────────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ def test_diagnose_malformed_llm_output_falls_back(
         return_value=httpx.Response(200, json={"response": "Sorry, I am not sure. {oops"})
     )
     c = client_factory("ollama")
-    body = c.post("/diagnose/graph-db", json={"anomalies": [ANOMALY]}).json()
+    body = c.post("/diagnose/neo4j", json={"anomalies": [ANOMALY]}).json()
     assert body["details"]["outcome"] == "fallback"
     assert "llm_error" in body["details"]
     assert 'llm_failures_total{provider="ollama"}' in c.get("/metrics").text
@@ -212,7 +212,7 @@ def test_diagnose_errors(client_factory: Callable[..., TestClient]) -> None:
 def test_playbook_endpoints(client_factory: Callable[..., TestClient]) -> None:
     c = client_factory()
     a = c.post("/diagnose/kafka").json()["playbook_id"]
-    b = c.post("/diagnose/llm", json={"alert_id": ALERT_ID}).json()["playbook_id"]
+    b = c.post("/diagnose/ollama", json={"alert_id": ALERT_ID}).json()["playbook_id"]
 
     md = c.get(f"/playbook/{a}", params={"format": "markdown"})
     assert md.status_code == 200 and md.headers["content-type"].startswith("text/markdown")
@@ -226,7 +226,7 @@ def test_playbook_endpoints(client_factory: Callable[..., TestClient]) -> None:
     assert items[0]["generated_at"] >= items[1]["generated_at"]
     assert all("steps" in i for i in items)
     assert [
-        i["playbook_id"] for i in c.get("/playbooks", params={"component_id": "llm"}).json()
+        i["playbook_id"] for i in c.get("/playbooks", params={"component_id": "ollama"}).json()
     ] == [b]
     assert [
         i["playbook_id"] for i in c.get("/playbooks", params={"alert_id": ALERT_ID}).json()
@@ -242,7 +242,12 @@ def test_no_llm_series_when_provider_none(tmp_path: object) -> None:
         "    c.post('/diagnose/kafka')\n"
         "    print(c.get('/metrics').text)\n"
     )
-    env = {**os.environ, "LLM_PROVIDER": "none", "PLAYBOOK_STORE_DIR": str(tmp_path)}
+    env = {
+        **os.environ,
+        "LLM_PROVIDER": "none",
+        "PLAYBOOK_STORE_DIR": str(tmp_path),
+        "INCIDENT_AUTO_DIAGNOSE": "false",
+    }
     out = subprocess.run(
         [sys.executable, "-c", code],
         cwd=SERVICE_ROOT,
@@ -260,7 +265,7 @@ def test_diagnose_rate_limited_with_retry_after(
     settings: Settings, make_engine: Callable[..., DiagnosticEngine]
 ) -> None:
     settings.diagnose_rate_limit_per_minute = 2
-    with TestClient(create_app(settings, make_engine())) as c:
+    with TestClient(create_app(settings, engine=make_engine())) as c:
         assert c.post("/diagnose/kafka").status_code == 200
         assert c.post("/diagnose/kafka").status_code == 200
         r = c.post("/diagnose/kafka")

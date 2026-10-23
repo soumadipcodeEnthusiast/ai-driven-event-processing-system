@@ -79,7 +79,10 @@ class LLMClient:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
-                    "options": {"temperature": 0.2},
+                    # Room for the whole JSON playbook; Ollama's default output cap
+                    # can cut it off mid-array, and the prompt plus graph table
+                    # can exceed the default 2k context.
+                    "options": {"temperature": 0.2, "num_predict": 900, "num_ctx": 4096},
                 },
             )
         if self.provider == "anthropic":

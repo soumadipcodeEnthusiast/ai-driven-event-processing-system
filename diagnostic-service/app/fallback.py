@@ -22,6 +22,17 @@ def _metric_step(component: str, node_type: str, anomaly: dict[str, Any]) -> dic
     when = anomaly.get("predicted_breach_time", "soon")
     sel = f"-n {NAMESPACE} -l app.kubernetes.io/name={component}"
     m = metric.lower()
+    if anomaly.get("kind") == "event_anomaly" and "latency" in m:
+        return {
+            "title": f"Find where {component} spends the extra time ({metric} anomaly, "
+            f"score {anomaly.get('score')})",
+            "command": "curl -s 'http://prometheus:9090/api/v1/query?query=histogram_quantile("
+            "0.99,sum by (le,route)(rate(http_request_duration_seconds_bucket"
+            f"{{service=\"{component}\"}}[5m])))'",
+            "expected_outcome": "The route or downstream call behind the latency outlier is known.",
+        }
+    if anomaly.get("kind") == "event_anomaly" and "status" in m:
+        m = "error"
     if "cpu" in m:
         return {
             "title": f"Confirm CPU pressure on {component} ({sev}, breach predicted {when})",
@@ -202,8 +213,10 @@ def build_fallback(
         )
     elif first is not None:
         hypothesis = (
-            f"No unhealthy dependency in the 2-hop graph; the predicted {first.get('metric_name')} "
-            f"breach points to load or resource pressure on {component_id} itself"
+            f"No unhealthy dependency in the 2-hop graph; the "
+            f"{'observed' if first.get('kind') == 'event_anomaly' else 'predicted'} "
+            f"{first.get('metric_name')} anomaly points to load or resource pressure on "
+            f"{component_id} itself"
             + (" possibly related to its recent deployment." if _recent_deploy(meta, now) else ".")
         )
     else:
@@ -211,7 +224,13 @@ def build_fallback(
             f"No anomaly data and no unhealthy dependency recorded for {component_id}; "
             "root cause undetermined from graph context."
         )
-    if first is not None:
+    if first is not None and first.get("kind") == "event_anomaly":
+        summary = (
+            f"{str(first.get('severity', 'high')).capitalize()} {first.get('metric_name')} anomaly "
+            f"detected on {component_id} (score {first.get('score')}, "
+            f"{len(anomalies)} anomalous event(s))."
+        )
+    elif first is not None:
         summary = (
             f"{str(first.get('severity', 'predicted')).capitalize()} {first.get('metric_name')} "
             f"breach predicted on {component_id} at {first.get('predicted_breach_time', 'n/a')}."
