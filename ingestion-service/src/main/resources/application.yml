@@ -34,6 +34,17 @@ spring:
 server:
   port: 8080
   shutdown: graceful
+  # ── TLS 1.2+ (REQ-047) ───────────────────────────────────────────────────
+  # Off by default (local/dev runs plaintext inside the compose/k8s network;
+  # in EKS, TLS terminates at the ingress/ALB — infra/k8s/ingress.yaml).
+  # SSL_ENABLED=true + a PKCS12 keystore terminates TLS in the service itself.
+  ssl:
+    enabled: ${SSL_ENABLED:false}
+    protocol: TLS
+    enabled-protocols: TLSv1.2,TLSv1.3
+    key-store: ${SSL_KEYSTORE_PATH:}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD:}
+    key-store-type: PKCS12
 
 # ── Actuator / Observability ─────────────────────────────────────────────────
 management:
@@ -61,6 +72,14 @@ management:
 
 # ── Application-specific ─────────────────────────────────────────────────────
 app:
+  # ── Security: OAuth 2.0 resource server (REQ-046), see SecurityConfig.java ─
+  # Neither URI set → every bearer token is rejected (only the unauthenticated
+  # health/prometheus actuator endpoints are reachable).
+  security:
+    oauth2:
+      issuer-uri: ${OAUTH2_ISSUER_URI:}
+      jwk-set-uri: ${OAUTH2_JWKS_URL:}
+      audience: ${OAUTH2_AUDIENCE:}
   kafka:
     input-topic: ${KAFKA_INPUT_TOPIC:raw-events}
     output-topic: ${KAFKA_OUTPUT_TOPIC:normalized-events}
