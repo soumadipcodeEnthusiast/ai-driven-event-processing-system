@@ -1,9 +1,8 @@
 """
-metrics.py — Prometheus metrics for diagnostic-service.
+metrics.py — Prometheus metrics for diagnostic-service (anomaly detection).
 
-Names, labels and buckets are fixed by docs/CONTRACTS.md §7 and the SRE
-dashboards/alert rules. ``llm_*`` series are only ever created with a real
-provider label, so with LLM_PROVIDER=none no llm_* samples are exported.
+Names and labels are fixed by docs/CONTRACTS.md §7 — dashboards and alert
+rules depend on them. Do not rename.
 """
 
 from __future__ import annotations
@@ -11,31 +10,77 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+ANOMALY_SCORES = Histogram(
+    "anomaly_score",
+    "Distribution of computed anomaly scores (REQ-016).",
+    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+ANOMALIES_DETECTED = Counter(
+    "anomalies_detected_total",
+    "Events whose anomaly score exceeded the configured threshold (REQ-017).",
+)
+ANOMALY_AUDIT_PUBLISH_FAILURES = Counter(
+    "anomaly_audit_publish_failures_total",
+    "Failed attempts to publish an anomaly record to the audit topic (REQ-019).",
+)
+ANOMALY_AUDIT_PUBLISHED = Counter(
+    "anomaly_audit_published_total",
+    "Anomaly records the broker acknowledged on the audit topic (REQ-019).",
+)
+EVENTS_SCORED = Counter(
+    "anomaly_events_scored_total",
+    "Events scored, by entry point (http = POST /score, kafka = normalized-events consumer).",
+    ["source"],
+)
+CONSUMER_ERRORS = Counter(
+    "anomaly_consumer_errors_total",
+    "normalized-events consumer errors, by reason (kafka|malformed|unexpected).",
+    ["reason"],
+)
+ANOMALY_THRESHOLD = Gauge(
+    "anomaly_threshold",
+    "Current anomaly-score threshold (REQ-017/REQ-020).",
+)
+MODEL_INFO = Gauge(
+    "anomaly_model_info",
+    "Active anomaly scoring model version (value is always 1).",
+    ["model_version"],
+)
+SCORING_LATENCY = Histogram(
+    "anomaly_scoring_latency_seconds",
+    "Latency of a single AnomalyScorer.score_event call.",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+
+
+# ── GraphRAG root-cause analysis (dependency graph → LLM → incident playbook) ──
+
 DIAGNOSES = Counter(
     "diagnoses_total",
-    "Diagnoses executed: ok (LLM playbook), fallback (rule-based), error (no playbook).",
+    "Diagnoses executed: ok (LLM playbook), fallback (rule-based), cached, error (no playbook).",
     ["outcome"],
 )
 DIAGNOSIS_LATENCY = Histogram(
     "diagnosis_latency_seconds",
-    "End-to-end latency of POST /diagnose (context + LLM + persistence).",
-    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0),
+    "End-to-end latency of one diagnosis (graph context + LLM + persistence).",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0),
 )
 GRAPH_CONTEXT = Histogram(
     "graph_context_seconds",
-    "Latency of dependency-graph context retrieval (REQ-G target < 1 s).",
+    "Latency of dependency-graph context retrieval (target < 1 s).",
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 LLM_REQUEST = Histogram(
     "llm_request_seconds",
     "Latency of one LLM invocation including retries.",
     ["provider"],
-    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0),
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0),
 )
 LLM_FAILURES = Counter(
     "llm_failures_total",
@@ -54,6 +99,23 @@ DIAGNOSE_RATE_LIMITED = Counter(
     "diagnose_rate_limited_total",
     "POST /diagnose requests rejected with 429 by the rate limiter.",
 )
+INCIDENTS = Counter(
+    "incident_triggers_total",
+    "Automatic diagnoses requested from detected anomalies, by outcome "
+    "(queued|cooldown|dropped|unknown_component|done|failed).",
+    ["outcome"],
+)
+PLAYBOOKS_PUBLISHED = Counter(
+    "incident_playbooks_published_total",
+    "Incident playbooks the broker acknowledged on the incident-playbooks topic.",
+    ["outcome"],
+)
+
+
+def set_model_info(model_version: str) -> None:
+    MODEL_INFO.clear()
+    MODEL_INFO.labels(model_version=model_version).set(1)
+
 
 HTTP_REQUESTS = Counter(
     "http_requests_total",

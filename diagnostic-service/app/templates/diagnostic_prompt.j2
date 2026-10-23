@@ -1,7 +1,7 @@
 {#- diagnostic_prompt.j2 — GraphRAG prompt for incident playbooks (REQ-H).
     Variables: component (dict), dependencies (list), anomalies (list),
     unhealthy (list), now (str), max_steps (int). -#}
-An incident is predicted on the component `{{ component.node_id }}` of an event-processing platform
+An incident is in progress or predicted on the component `{{ component.node_id }}` of an event-processing platform
 (Kafka ingestion, Prometheus, ML forecasting and diagnostics services, running in Kubernetes
 namespace `event-processor` or docker compose). Diagnose the most likely root cause and write a
 remediation playbook for an on-call engineer.
@@ -17,7 +17,7 @@ Current time (UTC): {{ now }}
 - SLA tier: {{ component.metadata.sla_tier }}
 - last deployed at: {{ component.metadata.last_deployed_at }}
 
-## Predicted anomalies (from the forecasting service, p90 forecast)
+## Anomalies (kind=event_anomaly: scored on the live event stream; otherwise predicted by the forecasting service, p90 forecast)
 {% if anomalies -%}
 {% for a in anomalies -%}
 - {{ a | tojson }}
@@ -42,7 +42,7 @@ Unhealthy dependencies: {{ unhealthy | join(", ") }}
 1. Use only the facts above; if evidence is weak, say so in the hypothesis.
 2. Prefer causes in downstream dependencies that are degraded/down, then resource pressure on the
    component itself, then recent deployments.
-3. Produce between 3 and {{ max_steps }} steps ranked by priority (rank 1 = do first): diagnostic
+3. Be concise. Produce 4 to 6 steps (never fewer than 3, never more than {{ max_steps }}) ranked by priority (rank 1 = do first): diagnostic
    checks first, then mitigations, then follow-ups. Commands must be safe, read-only where possible,
    and concrete (kubectl / curl / kafka CLI). Destructive actions must say so in the title.
 
@@ -52,6 +52,9 @@ Respond with a single JSON object and nothing else (no prose, no Markdown fences
   "summary": "<one sentence describing the incident>",
   "root_cause_hypothesis": "<most likely root cause and the evidence for it>",
   "steps": [
-    {"rank": 1, "title": "<short imperative action>", "command": "<shell command or empty string>", "expected_outcome": "<what success looks like>"}
+    {"rank": 1, "title": "<first diagnostic check>", "command": "<shell command or empty string>", "expected_outcome": "<what success looks like>"},
+    {"rank": 2, "title": "<second check or mitigation>", "command": "<shell command or empty string>", "expected_outcome": "<what success looks like>"},
+    {"rank": 3, "title": "<mitigation or follow-up>", "command": "<shell command or empty string>", "expected_outcome": "<what success looks like>"}
   ]
 }
+The "steps" array MUST contain at least 3 objects (up to {{ max_steps }}), each with all four keys.
