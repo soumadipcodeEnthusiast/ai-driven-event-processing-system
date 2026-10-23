@@ -23,6 +23,7 @@ import json
 import logging
 import sys
 import time
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -69,32 +70,49 @@ def fetch_prometheus(url: str, config_path: str, days: float, step: str) -> list
     return rows
 
 
+MAX_GAP_STEPS = 5  # longer scrape gaps (stack stopped) split a series instead of being bridged
+
+
 def prepare_frame(df: Any, step_s: float) -> Any:
-    """Regularise each series onto the step grid and add model features."""
+    """Regularise each series onto the step grid and add model features.
+
+    Non-finite samples (e.g. NaN from 0/0 rate ratios) are dropped. A gap of
+    more than ``MAX_GAP_STEPS`` steps — the stack was down — starts a new
+    segment rather than being interpolated across; each segment becomes its
+    own TFT group (``series`` = ``component:metric#n``).
+    """
     import pandas as pd
 
     if not np.issubdtype(df["timestamp"].dtype, np.number):
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).astype("int64") / 1e9
+    df = df[np.isfinite(df["value"].astype(float))]
     frames = []
     for series, g in df.groupby("series"):
         g = g.groupby("timestamp", as_index=False)["value"].max().sort_values("timestamp")
         ts = g["timestamp"].to_numpy(dtype=float)
-        grid = np.arange(ts[0], ts[-1] + step_s / 2, step_s)
-        vals = np.interp(grid, ts, g["value"].to_numpy(dtype=float))
-        feats = time_features(grid)
+        vals_raw = g["value"].to_numpy(dtype=float)
+        breaks = np.where(np.diff(ts) > MAX_GAP_STEPS * step_s)[0] + 1
         metric = df.loc[df["series"] == series, "metric"].iloc[0]
-        frames.append(
-            pd.DataFrame(
-                {
-                    "series": series,
-                    "metric": metric,
-                    "time_idx": np.arange(len(grid), dtype=np.int64),
-                    "value": vals.astype(np.float32),
-                    "hour_sin": feats["hour_sin"].astype(np.float32),
-                    "hour_cos": feats["hour_cos"].astype(np.float32),
-                }
+        for n, (seg_ts, seg_vals) in enumerate(
+            zip(np.split(ts, breaks), np.split(vals_raw, breaks), strict=True)
+        ):
+            if len(seg_ts) < 2:
+                continue
+            grid = np.arange(seg_ts[0], seg_ts[-1] + step_s / 2, step_s)
+            vals = np.interp(grid, seg_ts, seg_vals)
+            feats = time_features(grid)
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "series": f"{series}#{n}",
+                        "metric": metric,
+                        "time_idx": np.arange(len(grid), dtype=np.int64),
+                        "value": vals.astype(np.float32),
+                        "hour_sin": feats["hour_sin"].astype(np.float32),
+                        "hour_cos": feats["hour_cos"].astype(np.float32),
+                    }
+                )
             )
-        )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -164,6 +182,8 @@ def train(args: argparse.Namespace) -> Path:
         accelerator="cpu",
         gradient_clip_val=0.1,
         callbacks=[EarlyStopping(monitor="val_loss", patience=4, mode="min")],
+        # Cap the work per epoch so a CPU-only laptop trains in minutes, not hours.
+        limit_train_batches=args.max_batches or 1.0,
         enable_checkpointing=False,
         logger=False,
     )
@@ -203,11 +223,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--prediction-length", type=int, default=60)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument(
+        "--max-batches", type=int, default=0, help="training batches per epoch (0 = all)"
+    )
     p.add_argument("--hidden-size", type=int, default=32)
     p.add_argument("--learning-rate", type=float, default=0.01)
     p.add_argument("--output", default="models/tft.ckpt")
     p.add_argument("--version", default=f"tft-{datetime.now(timezone.utc):%Y%m%d}")
     logging.basicConfig(level=logging.INFO)
+    warnings.filterwarnings("ignore", message="X does not have valid feature names")
     train(p.parse_args(argv))
 
 
