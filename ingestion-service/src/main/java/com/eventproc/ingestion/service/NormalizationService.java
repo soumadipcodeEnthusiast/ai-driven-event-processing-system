@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  * unit tested in isolation. Every rule violation is reported as a
  * {@link SchemaValidationException} carrying all field-level errors found.
  *
- * <p>Requirements: REQ-B (schema validation), REQ-C (normalisation).
+ * <p>Requirements: REQ-005 (schema validation), REQ-008 (normalisation).
  */
 @Service
 public class NormalizationService {

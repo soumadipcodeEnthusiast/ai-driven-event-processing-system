@@ -24,7 +24,7 @@ RUN ./mvnw -B -q package -DskipTests \
 FROM eclipse-temurin:17-jre-jammy AS runtime
 
 LABEL org.opencontainers.image.title="ingestion-service" \
-      org.opencontainers.image.description="Kafka event ingestion and normalisation (REQ-A, REQ-B, REQ-C)" \
+      org.opencontainers.image.description="Kafka event ingestion and normalisation (REQ-001, REQ-005, REQ-008)" \
       org.opencontainers.image.source="https://github.com/your-org/ai-driven-system"
 
 # Fixed UID/GID so Kubernetes `runAsUser: 10001` matches the image user.
