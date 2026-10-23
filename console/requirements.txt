@@ -1,0 +1,6 @@
+# ─── console/requirements.txt — demo console (local stack only) ─────────────
+fastapi==0.111.*
+uvicorn==0.30.*
+httpx==0.27.*
+confluent-kafka==2.4.*
+boto3==1.34.*

@@ -1,0 +1,8 @@
+# Plugins the Jenkinsfile needs (declarative pipeline, matrix, junit, timestamps, cleanWs, git SCM).
+workflow-aggregator
+pipeline-model-definition
+git
+junit
+timestamper
+ws-cleanup
+pipeline-stage-view

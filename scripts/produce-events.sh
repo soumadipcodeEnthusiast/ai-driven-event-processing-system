@@ -75,7 +75,7 @@ generate() {
       srand(seed)
       ns = split("checkout-api payments-api auth-service inventory-api", sources, " ")
       nt = split("http_request db_query cache_miss error heartbeat", types, " ")
-      nc = split("ingestion-service forecasting-service diagnostic-service kafka zookeeper prometheus graph-db llm", comps, " ")
+      nc = split("ingestion-service forecasting-service diagnostic-service kafka zookeeper prometheus", comps, " ")
       invalid_kind = 0
       for (n = 1; n <= count; n++) {
         id = "evt-" run "-" n

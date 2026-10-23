@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Pipeline</title>
+<script>
+  // Apply the saved theme before first paint.
+  try { const t = localStorage.getItem("ep-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="console.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317191e'/%3E%3Crect x='7' y='9' width='18' height='3.5' rx='1.75' fill='%231d63ed'/%3E%3Crect x='7' y='14.25' width='13' height='3.5' rx='1.75' fill='%23ffffff'/%3E%3Crect x='7' y='19.5' width='8' height='3.5' rx='1.75' fill='%23ffffff' opacity='.55'/%3E%3C/svg%3E">
+</head>
+<body>
+<div class="app">
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+<aside class="side">
+  <a class="brand" href="#overview">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" class="b-bg"/><rect x="7" y="9" width="18" height="3.5" rx="1.75" class="b-1"/><rect x="7" y="14.25" width="13" height="3.5" rx="1.75" class="b-2"/><rect x="7" y="19.5" width="8" height="3.5" rx="1.75" class="b-3"/></svg>
+    <span>Event Pipeline</span>
+  </a>
+
+  <nav class="nav" aria-label="Sections">
+    <p class="nav-h">Monitor</p>
+    <a href="#overview" class="on"><svg viewBox="0 0 16 16"><path d="M2 2h5v5H2zM9 2h5v3H9zM9 7h5v7H9zM2 9h5v5H2z"/></svg>Overview</a>
+    <a href="#flow"><svg viewBox="0 0 16 16"><path d="M1 8h3m8 0h3M4 5h8v6H4z"/></svg>Event flow</a>
+    <a href="#kafka"><svg viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.8"/><circle cx="8" cy="13" r="1.8"/><circle cx="3" cy="8" r="1.8"/><circle cx="13" cy="8" r="1.8"/><path d="M8 5v6M5 8h6"/></svg>Kafka</a>
+    <a href="#ai"><svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="7" cy="12" r="2"/><path d="M6 4.3l4 .5M5 6l1.4 4M11 7l-3 3.5"/></svg>GraphRAG &amp; TFT</a>
+    <a href="#services"><svg viewBox="0 0 16 16"><path d="M2 3h12v4H2zM2 9h12v4H2z"/><path d="M4.5 5h.01M4.5 11h.01"/></svg>Containers</a>
+    <p class="nav-h">Present</p>
+    <a href="#demo"><svg viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></svg>Guided demo</a>
+    <p class="nav-h">Tools</p>
+    <a data-link="grafana" target="_blank" rel="noopener" class="ext">Grafana<i>↗</i></a>
+    <a data-link="prometheus" target="_blank" rel="noopener" class="ext">Prometheus<i>↗</i></a>
+    <a data-link="neo4j" target="_blank" rel="noopener" class="ext">Neo4j browser<i>↗</i></a>
+    <a data-link="minio" target="_blank" rel="noopener" class="ext">MinIO<i>↗</i></a>
+    <a data-link="forecasting" target="_blank" rel="noopener" class="ext">Forecasting API<i>↗</i></a>
+    <a data-link="diagnostic" target="_blank" rel="noopener" class="ext">Diagnostic API<i>↗</i></a>
+  </nav>
+
+  <div class="env">
+    <div class="env-row"><span class="env-k">Runtime</span><span>docker compose</span></div>
+    <div class="env-row"><span class="env-k">Broker</span><span class="mono">kafka:29092</span></div>
+    <div class="env-row"><span class="env-k">Containers</span><span id="env-up" class="mono">–</span></div>
+  </div>
+</aside>
+
+<!-- ── Main ────────────────────────────────────────────────────────── -->
+<div class="main">
+  <header class="top">
+    <div class="crumbs"><span>local</span><i>/</i><span>ai-event-processor</span><i>/</i><b id="crumb">Overview</b></div>
+    <div class="top-r">
+      <span class="status" id="status"><span class="sdot"></span><span id="status-t">Connecting</span></span>
+      <span class="live mono" id="live">–</span>
+      <span class="clock mono" id="clock">–</span>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle colour theme" title="Toggle theme">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9L13 13M3 13l1.1-1.1M11.9 4.1L13 3"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="content">
+
+    <section id="overview" class="page-head">
+      <div>
+        <h1>Overview</h1>
+        <p class="sub" id="sub">Live view of the event pipeline running in Docker.</p>
+      </div>
+      <div class="head-actions">
+        <a class="btn ghost" href="#demo">Guided demo</a>
+        <button class="btn" id="quick-produce" type="button">Publish 300 events</button>
+      </div>
+    </section>
+
+    <section class="kpis" aria-label="Key figures">
+      <article class="kpi" id="k-tp"><p class="k-l">Throughput</p><p class="k-v"><span>–</span><small>msg/s</small></p><p class="k-d">raw-events, last 5 s</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+      <article class="kpi" id="k-msgs"><p class="k-l">Messages in Kafka</p><p class="k-v"><span>–</span></p><p class="k-d">all topics</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+      <article class="kpi" id="k-dlt"><p class="k-l">Rejected to DLT</p><p class="k-v"><span>–</span><small>%</small></p><p class="k-d">of ingested events</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+      <article class="kpi" id="k-anom"><p class="k-l">Anomalies flagged</p><p class="k-v"><span>–</span></p><p class="k-d">since service start</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+      <article class="kpi" id="k-pb"><p class="k-l">GraphRAG playbooks</p><p class="k-v"><span>–</span></p><p class="k-d">root-cause analyses</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+      <article class="kpi" id="k-lag"><p class="k-l">Consumer lag</p><p class="k-v"><span>–</span></p><p class="k-d">all groups</p><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg></article>
+    </section>
+
+    <!-- flow -->
+    <section id="flow" class="card">
+      <header class="card-h">
+        <div><h2>Event flow</h2><p>Kafka offsets and service counters, refreshed every 2 s. Links light up while messages move.</p></div>
+        <div class="legend-inline"><span><i class="lg-topic"></i>Kafka topic</span><span><i class="lg-svc"></i>Container</span><span><i class="lg-ai"></i>AI stage</span></div>
+      </header>
+      <div class="flow-wrap">
+      <svg id="schematic" viewBox="0 0 1110 445" role="img" aria-label="Pipeline diagram">
+        <defs>
+          <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker>
+          <marker id="arr-live" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah-live"/></marker>
+        </defs>
+
+        <!-- links -->
+        <path class="link" data-topic="raw-events" d="M170,66 H194"/>
+        <path class="link" data-topic="raw-events" d="M356,66 H380"/>
+        <path class="link" data-topic="normalized-events" d="M542,66 H566"/>
+        <path class="link" data-topic="normalized-events" d="M728,66 H752"/>
+        <path class="link" data-topic="anomaly-audit" d="M914,66 H938"/>
+        <path class="link" data-topic="raw-events.DLT" d="M462,102 V138"/>
+        <path class="link" data-topic="raw-events" d="M276,92 V286 H380"/>
+        <path class="link" data-topic="normalized-events" d="M648,92 V222 H462 V248"/>
+        <path class="link" data-topic="archive" d="M542,286 H566"/>
+        <path class="link" data-topic="anomaly-audit" d="M834,102 V128"/>
+        <path class="link" data-topic="incident-playbooks" d="M1020,216 V246"/>
+        <path class="link" data-topic="alerts" d="M728,396 H846 V218"/>
+        <path class="link static" d="M356,396 H380"/>
+        <path class="link static" d="M542,396 H566"/>
+        <path class="link static" d="M194,396 H172"/>
+        <text class="e-l" x="470" y="125">rejected</text>
+        <text class="e-l" x="284" y="279">raw copy</text>
+        <text class="e-l" x="470" y="215">normalised copy</text>
+        <text class="e-l" x="842" y="120">anomalies</text>
+        <text class="e-l" x="854" y="320">POST /diagnose</text>
+
+        <!-- row 1: the event path -->
+        <g class="node svc" id="n-producers" transform="translate(10,30)"><rect width="160" height="72" rx="8"/>
+          <text class="n-k" x="12" y="20">Producers</text><text class="n-v" x="12" y="45" id="v-produced">0</text><text class="n-s" x="12" y="62">sent this session</text></g>
+        <g class="node topic" id="n-raw-events" transform="translate(196,40)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">raw-events</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-raw-events">–</text></g>
+        <g class="node svc" id="n-ingestion" transform="translate(382,30)"><rect width="160" height="72" rx="8"/>
+          <text class="n-k" x="12" y="20">Ingestion</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-v" x="12" y="45" id="v-ingest">–</text><text class="n-s" x="12" y="62" id="v-ingest-sub">validated</text></g>
+        <g class="node topic" id="n-normalized-events" transform="translate(568,40)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">normalized-events</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-normalized-events">–</text></g>
+        <g class="node svc" id="n-diagnostic" transform="translate(754,30)"><rect width="160" height="72" rx="8"/>
+          <text class="n-k" x="12" y="20">Anomaly scoring</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-v" x="12" y="45" id="v-scored">–</text><text class="n-s" x="12" y="62" id="v-scored-sub">scored</text></g>
+        <g class="node topic" id="n-anomaly-audit" transform="translate(940,40)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">anomaly-audit</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-anomaly-audit">–</text></g>
+
+        <!-- row 2 -->
+        <g class="node topic dlt" id="n-raw-events.DLT" transform="translate(382,140)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">raw-events.DLT</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-raw-events.DLT">–</text></g>
+        <g class="node ai" id="n-graphrag" transform="translate(754,130)"><rect width="346" height="86" rx="10"/>
+          <text class="n-k ai-k" x="14" y="21">GraphRAG root cause</text><text class="n-s" x="332" y="21" text-anchor="end" id="v-llm">–</text>
+          <g transform="translate(14,32)"><rect class="chip" width="96" height="42" rx="6"/><text class="c-k" x="10" y="17">Neo4j</text><text class="c-s" x="10" y="33">2-hop context</text><circle class="hdot" id="h-neo4j" cx="84" cy="12" r="3.5"/></g>
+          <path class="link static inner" d="M114,53 H126" transform="translate(0,0)"/>
+          <g transform="translate(128,32)"><rect class="chip" width="96" height="42" rx="6"/><text class="c-k" x="10" y="17">Ollama</text><text class="c-s" x="10" y="33" id="v-model">llm</text><circle class="hdot" id="h-ollama" cx="84" cy="12" r="3.5"/></g>
+          <path class="link static inner" d="M228,53 H240"/>
+          <g transform="translate(242,32)"><rect class="chip" width="90" height="42" rx="6"/><text class="c-k" x="10" y="17">Playbooks</text><text class="c-s" x="10" y="33" id="v-playbooks">–</text></g>
+        </g>
+
+        <!-- row 3 -->
+        <g class="node svc" id="n-archiver" transform="translate(382,250)"><rect width="160" height="72" rx="8"/>
+          <text class="n-k" x="12" y="20">Event archiver</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-v" x="12" y="45" id="v-archived">–</text><text class="n-s" x="12" y="62" id="v-archived-sub">records</text></g>
+        <g class="node svc store" id="n-minio" transform="translate(568,250)"><rect width="160" height="72" rx="8"/>
+          <text class="n-k" x="12" y="20" id="v-bucket">S3 · event-archive</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-v" x="12" y="45" id="v-objects">–</text><text class="n-s" x="12" y="62">gzip NDJSON by hour</text></g>
+        <g class="node topic" id="n-incident-playbooks" transform="translate(940,248)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">incident-playbooks</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-incident-playbooks">–</text></g>
+
+        <!-- metrics plane -->
+        <line class="divider" x1="10" y1="342" x2="1100" y2="342"/>
+        <text class="plane" x="10" y="336">Data plane</text>
+        <text class="plane" x="10" y="356">Metrics plane</text>
+        <g class="node svc" id="n-grafana" transform="translate(10,366)"><rect width="160" height="62" rx="8"/>
+          <text class="n-k" x="12" y="20">Grafana</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-s" x="12" y="44">dashboards · SLOs</text></g>
+        <g class="node svc" id="n-prometheus" transform="translate(196,366)"><rect width="160" height="62" rx="8"/>
+          <text class="n-k" x="12" y="20">Prometheus</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-s" x="12" y="44">scrapes every service</text></g>
+        <g class="node ai" id="n-forecasting" transform="translate(382,366)"><rect width="160" height="62" rx="8"/>
+          <text class="n-k ai-k" x="12" y="20">Forecasting · TFT</text><circle class="hdot" cx="146" cy="16" r="4"/><text class="n-s" x="12" y="44" id="v-forecaster">–</text></g>
+        <g class="node topic" id="n-alerts" transform="translate(568,370)"><rect width="160" height="52" rx="26"/>
+          <text class="t-k" x="80" y="21" text-anchor="middle">predictive alerts</text><text class="t-v" x="80" y="40" text-anchor="middle" id="v-alerts">–</text></g>
+      </svg>
+      </div>
+    </section>
+
+    <!-- kafka -->
+    <section id="kafka" class="grid-2">
+      <article class="card">
+        <header class="card-h">
+          <div><h2>Topic throughput</h2><p>Messages per second, last 15 minutes</p></div>
+          <button class="btn ghost sm" id="tp-table-btn" type="button" aria-pressed="false">Table</button>
+        </header>
+        <div class="chart-legend" id="tp-legend"></div>
+        <div class="chart" id="tp-chart">
+          <svg id="tp-svg" role="img" aria-label="Topic throughput chart"></svg>
+          <div class="tip" id="tp-tip" hidden></div>
+          <p class="empty" id="tp-empty" hidden>Collecting samples. The chart fills in over the next minute.</p>
+        </div>
+        <div class="tp-table" id="tp-table" hidden></div>
+      </article>
+      <article class="card">
+        <header class="card-h"><div><h2>Topics</h2><p>End offsets summed across partitions</p></div></header>
+        <table class="tbl" id="topic-table">
+          <thead><tr><th>Topic</th><th>Partitions</th><th class="r">Messages</th><th class="r">Now /s</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 class="sub-h">Consumer groups</h3>
+        <table class="tbl" id="group-table">
+          <thead><tr><th>Group</th><th>Reads</th><th class="r">Lag</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </article>
+    </section>
+
+    <!-- AI -->
+    <section id="ai" class="grid-2">
+      <article class="card">
+        <header class="card-h">
+          <div><h2>GraphRAG root-cause playbooks</h2><p id="rag-sub">Anomalies and predictive alerts → Neo4j context → LLM</p></div>
+          <a class="btn ghost sm" href="#demo" data-goto="4">Run one</a>
+        </header>
+        <ul class="pb-list" id="pb-list"><li class="empty">No playbooks yet.</li></ul>
+      </article>
+      <article class="card">
+        <header class="card-h">
+          <div><h2>Forecasting · Temporal Fusion Transformer</h2><p id="tft-sub">60-minute probabilistic forecasts of CPU, memory and error rate</p></div>
+          <a class="btn ghost sm" href="#demo" data-goto="5">Forecast</a>
+        </header>
+        <dl class="facts" id="tft-facts"></dl>
+        <h3 class="sub-h">Open predictive alerts</h3>
+        <div id="alert-list" class="alert-list"><p class="empty">None.</p></div>
+      </article>
+    </section>
+
+    <!-- services -->
+    <section id="services" class="card">
+      <header class="card-h"><div><h2>Containers</h2><p>Health probed every 2 s from inside the Docker network</p></div></header>
+      <table class="tbl" id="svc-table">
+        <thead><tr><th>Container</th><th>Role</th><th>Status</th><th class="r">Port</th><th class="r">Response</th><th>Detail</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- demo -->
+    <section id="demo" class="card demo">
+      <header class="card-h"><div><h2>Guided demo</h2><p>Work left to right. The blue box under each step is what to say.</p></div></header>
+      <div class="tabs" role="tablist" id="steps">
+        <button role="tab" data-step="1" class="on"><b>1</b>Send traffic</button>
+        <button role="tab" data-step="2"><b>2</b>Inside Kafka</button>
+        <button role="tab" data-step="3"><b>3</b>Anomaly</button>
+        <button role="tab" data-step="4"><b>4</b>GraphRAG</button>
+        <button role="tab" data-step="5"><b>5</b>TFT forecast</button>
+        <button role="tab" data-step="6"><b>6</b>Archive</button>
+        <button role="tab" data-step="7"><b>7</b>Dashboards</button>
+      </div>
+
+      <div class="pane">
+        <article data-pane="1" class="on">
+          <p class="say">“Applications publish JSON events into Kafka. I'll send a batch with some broken on purpose, so you can see validation and the dead-letter topic at work.”</p>
+          <div class="controls">
+            <label>Events<span class="seg" data-name="count"><button data-v="100">100</button><button data-v="300" class="on">300</button><button data-v="1000">1,000</button><button data-v="5000">5,000</button></span></label>
+            <label>Broken on purpose<span class="seg" data-name="invalid"><button data-v="0">0%</button><button data-v="0.1" class="on">10%</button><button data-v="0.25">25%</button></span></label>
+            <button class="btn" id="btn-produce" type="button">Publish to raw-events</button>
+          </div>
+          <div class="out" id="out-produce"><p class="hint">Watch the event flow above: the counters and links react within two seconds.</p></div>
+        </article>
+
+        <article data-pane="2">
+          <p class="say">“These are the real messages on each topic. Valid events come out normalised; rejected ones go to the DLT with the reason in a header. Anomalies and AI playbooks are topics too.”</p>
+          <div class="controls">
+            <span class="seg" data-name="topic"><button data-v="raw-events">raw-events</button><button data-v="normalized-events" class="on">normalized-events</button><button data-v="raw-events.DLT">raw-events.DLT</button><button data-v="anomaly-audit">anomaly-audit</button><button data-v="incident-playbooks">incident-playbooks</button></span>
+            <button class="btn" id="btn-tail" type="button">Fetch latest 8</button>
+          </div>
+          <div class="out" id="out-tail"><p class="hint">Read straight from the broker, newest first.</p></div>
+        </article>
+
+        <article data-pane="3">
+          <p class="say">“The diagnostic service learns what normal looks like for each service. A checkout request usually takes about 100 ms. Watch what a slow one scores.”</p>
+          <div class="controls">
+            <label>Latency <output id="lat-val">950 ms</output><input type="range" id="lat" min="40" max="1200" step="5" value="950"></label>
+            <span class="seg" data-name="preset"><button data-v="104">normal 104</button><button data-v="140">slow 140</button><button data-v="950" class="on">spike 950</button></span>
+            <button class="btn" id="btn-score" type="button">Score request</button>
+          </div>
+          <div class="out" id="out-score"><p class="hint">Each run trains a fresh baseline of 30 normal requests (about 100 ms ± 12), then scores yours. Try 140 ms at threshold 0.8, then switch to 0.6 and score again.</p></div>
+          <div class="sub-controls"><span class="lbl">Threshold, changed live</span><span class="seg" data-name="threshold" id="seg-threshold"><button data-v="0.6">0.6</button><button data-v="0.8">0.8</button><button data-v="0.9">0.9</button></span></div>
+        </article>
+
+        <article data-pane="4">
+          <p class="say">“When something looks wrong, GraphRAG works out why. It pulls the component's two-hop neighbourhood from Neo4j, hands it to a local LLM, and gets back a ranked remediation playbook.”</p>
+          <div class="controls">
+            <label>Component<select id="rag-comp"></select></label>
+            <button class="btn ghost" id="btn-graph" type="button">Show graph context</button>
+            <button class="btn" id="btn-diagnose" type="button">Generate playbook</button>
+          </div>
+          <div class="rag-grid">
+            <figure class="graph-fig"><svg id="graph-svg" viewBox="0 0 440 340" role="img" aria-label="Dependency neighbourhood"></svg>
+              <figcaption id="graph-cap">Pick a component to see what GraphRAG retrieves.</figcaption></figure>
+            <div class="out" id="out-diagnose"><p class="hint">If you scored an anomaly in step 3, it is passed along as evidence. The local model on CPU takes 20–90 s; the rule-based fallback answers instantly if the LLM is unavailable.</p></div>
+          </div>
+        </article>
+
+        <article data-pane="5">
+          <p class="say">“Instead of waiting for something to break, a Temporal Fusion Transformer trained on this platform's own metrics forecasts the next hour, and raises an alert while there's still time to act. Every alert gets a GraphRAG playbook too.”</p>
+          <div class="controls">
+            <label>Component<select id="component"><option>ingestion-service</option><option>diagnostic-service</option><option>forecasting-service</option><option>prometheus</option></select></label>
+            <button class="btn ghost" id="btn-forecast" type="button">Forecast 60 min</button>
+            <button class="btn" id="btn-simulate" type="button">Simulate a breach</button>
+          </div>
+          <div class="out" id="out-forecast"><p class="hint">“Simulate” lowers one threshold below the current value, forecasts, then restores it.</p></div>
+        </article>
+
+        <article data-pane="6">
+          <p class="say">“Both topics are batched into compressed files in S3, partitioned by date and hour, for replay and audit.”</p>
+          <div class="controls"><button class="btn" id="btn-archive" type="button">List bucket</button><a class="btn ghost" data-link="minio" target="_blank" rel="noopener">Open MinIO ↗</a></div>
+          <div class="out" id="out-archive"><p class="hint">The archiver flushes every 30 s or 1,000 records. MinIO login: minioadmin / minioadmin.</p></div>
+        </article>
+
+        <article data-pane="7">
+          <p class="say">“Everything you just saw is also on the operations dashboards, with SLO alerts in Prometheus.”</p>
+          <ul class="links">
+            <li><a data-link="grafana" target="_blank" rel="noopener">Grafana ↗</a><span>Service health: throughput, DLT ratio, anomalies, archival</span></li>
+            <li><a data-link="neo4j" target="_blank" rel="noopener">Neo4j browser ↗</a><span>Run <code>MATCH (c:Component)-[r]->(d) RETURN c,r,d</code> to see the whole graph (neo4j / localdevpassword)</span></li>
+            <li><a data-link="prometheus" data-suffix="/alerts" target="_blank" rel="noopener">Prometheus alerts ↗</a><span>Alert rules and their state</span></li>
+            <li><a data-link="forecasting" target="_blank" rel="noopener">Forecasting API ↗</a><span>/forecast, /alerts, /predictions</span></li>
+            <li><a data-link="diagnostic" target="_blank" rel="noopener">Diagnostic API ↗</a><span>/score, /diagnose, /playbooks, /graph</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="card">
+      <header class="card-h"><div><h2>Activity</h2><p>What you've run from this page</p></div></header>
+      <ol id="log" class="log"></ol>
+    </section>
+
+    <footer class="foot mono">Reads Kafka directly; every other figure comes from the services' own APIs. Nothing on this page is simulated.</footer>
+  </main>
+</div>
+</div>
+<script src="console.js"></script>
+</body>
+</html>

@@ -81,3 +81,25 @@ coverage.xml
 # ─── Node (dashboard future) ─────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
+
+# ─── Terraform ───────────────────────────────────────────────────────────────
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ─── Forecasting model artefacts (trained by training/train_forecast_model.py) ─
+forecasting-service/models/*
+!forecasting-service/models/.gitkeep
+
+# ─── Load test artefacts ─────────────────────────────────────────────────────
+loadtest/.lib/
+loadtest/results/
