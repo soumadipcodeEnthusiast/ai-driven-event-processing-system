@@ -4,7 +4,7 @@
 Accepted (2026-10-04). Interim; revisit before any multi-replica or production deployment.
 
 ## Context
-forecasting-service must hold alert state for `GET /alerts`, ack/resolve transitions, the "one OPEN alert per (component, metric)" rule, and the `playbook_id` link. A durable store (DB, Kafka compacted topic) adds infrastructure that the current scope does not need.
+forecasting-service must hold alert state for `GET /alerts`, ack/resolve transitions, and the "one OPEN alert per (component, metric)" rule. (At the time this ADR was written, `PredictiveAlert` also carried a `playbook_id` link; that field is removed — docs/adr/0008 — but it doesn't change this decision.) A durable store (DB, Kafka compacted topic) adds infrastructure that the current scope does not need.
 
 ## Decision
 Keep alerts in a process-local, lock-protected store (dict keyed by `alert_id` plus an index on `(component_id, metric_name)` for OPEN alerts), behind an `AlertStore` interface. Bound it: keep all non-resolved alerts plus the most recent N resolved ones.
