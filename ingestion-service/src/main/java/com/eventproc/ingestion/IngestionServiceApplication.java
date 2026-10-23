@@ -7,7 +7,7 @@ import org.springframework.kafka.annotation.EnableKafka;
 /**
  * Entry-point for the Ingestion Service — synchronous Kafka consumer path.
  *
- * <p>Supports REQ-A (event ingestion), REQ-B (validation), REQ-C (normalisation).
+ * <p>Supports REQ-001 (event ingestion), REQ-005 (validation), REQ-008 (normalisation), REQ-040 (at-least-once idempotent delivery).
  */
 @SpringBootApplication
 @EnableKafka

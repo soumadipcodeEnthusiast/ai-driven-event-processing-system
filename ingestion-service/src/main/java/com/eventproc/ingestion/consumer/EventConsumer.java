@@ -30,18 +30,18 @@ import java.util.concurrent.TimeoutException;
  * Consumes {@code raw-events}, normalises each record and publishes it to
  * {@code normalized-events} keyed by {@code event_id}; invalid records go to the DLT.
  *
- * <p><b>Delivery (REQ-A):</b> at-least-once. Records of a poll are processed in order and
+ * <p><b>Delivery (REQ-001, REQ-040):</b> at-least-once. Records of a poll are processed in order and
  * their produce requests pipelined; the batch is acknowledged ({@code MANUAL_IMMEDIATE})
  * only after the broker has confirmed every produced record. If a send fails or an
  * unexpected error occurs at index {@code i}, all earlier sends are awaited and a
  * {@link BatchListenerFailedException} for {@code i} is thrown: the error handler commits
  * offsets before {@code i}, retries from {@code i} with back-off and finally dead-letters it.
  *
- * <p><b>Validation (REQ-B):</b> contract violations are deterministic, so they are not
+ * <p><b>Validation (REQ-005):</b> contract violations are deterministic, so they are not
  * retried — the original bytes go straight to the DLT with an {@code x-error-reason} header
  * and a structured WARN log carrying partition and offset.
  *
- * <p><b>Normalisation (REQ-C):</b> delegated to {@link NormalizationService}.
+ * <p><b>Normalisation (REQ-008):</b> delegated to {@link NormalizationService}.
  */
 @Component
 public class EventConsumer {
@@ -77,7 +77,7 @@ public class EventConsumer {
         for (int i = 0; i < records.size(); i++) {
             ConsumerRecord<String, byte[]> record = records.get(i);
             // Timed from parse until the broker confirms the send (see awaitAll),
-            // so the REQ-A latency SLO sees produce/broker slowness too.
+            // so the REQ-004 latency SLO sees produce/broker slowness too.
             Timer.Sample sample = metrics.startTimer();
             try {
                 pending.add(handle(record, i, sample));
